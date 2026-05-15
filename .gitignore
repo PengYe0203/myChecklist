@@ -32,5 +32,8 @@ build/
 ### VS Code ###
 .vscode/
 
+### local config ###
+**/application-local.properties
+
 ### my temp note ###
 *.docx
