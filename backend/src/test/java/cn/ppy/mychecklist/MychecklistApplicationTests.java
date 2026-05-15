@@ -17,7 +17,6 @@ class MychecklistApplicationTests {
         // 如果能运行到这一步，说明连接通了。
         // 我们用断言确保 time 不为空，测试通过即代表连接成功。
         org.junit.jupiter.api.Assertions.assertNotNull(time, "数据库返回时间不能为空");
-        System.out.println(">>> 数据库连接成功！当前时间是：" + time);
     }
 
 }
