@@ -25,7 +25,7 @@ public class Task {
 
     private Boolean isCompleted;
 
-    private Integer type; // 任务类型：0-随手记，1-周期任务，2-DDL
+    private Integer type; // 任务类型：0-随手记，1-周期任务，2-DDL，3-场景
 
     private Integer settlementType; // 结算类型：0-手动结算，1-自动结算
 
@@ -44,4 +44,6 @@ public class Task {
     private Integer runStatus; // 运行状态：0-未开始，1-进行中，2-暂停
 
     private LocalDateTime lastStartTime; // 上次运行时间
+
+    private boolean isActive; // 是否激活，主要用于周期任务的启停
 }

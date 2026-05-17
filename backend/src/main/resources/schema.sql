@@ -16,13 +16,14 @@ create table task (
   parent_id BIGINT DEFAULT 0,
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
   is_completed TINYINT(1) DEFAULT 0,
-  type INT DEFAULT 0 COMMENT '0-quicknote 1-scheduled 2-DDL',
+  type INT DEFAULT 0 COMMENT '0-quicknote 1-scheduled 2-DDL 3-scene',
   settlement_type INT DEFAULT 0 COMMENT '0-manual 1-auto',
   target_duration INT, -- second
   start_time DATETIME,
   end_time DATETIME,
   cron_config VARCHAR(100),
   due DATETIME,
+  is_active TINYINT(1) DEFAULT 0 COMMENT '0-inactive 1-active',
   INDEX idx_user_id (user_id)
 );
 
