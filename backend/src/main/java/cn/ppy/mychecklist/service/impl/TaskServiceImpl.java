@@ -6,9 +6,11 @@ import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -22,6 +24,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     public String createTask(Task task) {
+        Long currentUser = 1L; // TODO: 之后实现登录系统后再获取当前用户ID
+        task.setUserId(currentUser);
+        task.setCreateTime(LocalDateTime.now());
+
+
         return this.save(task) ? "创建成功" : "创建失败";
     }
 
@@ -36,8 +43,21 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     @Override
+    @Transactional
     public void toggleActive(Long taskId, boolean active) {
-        //todo: 切换周期任务的启停状态，即更新isActive字段
+        Task task = this.getById(taskId);
+        if (task == null) return; // 任务不存在，直接返回
+
+        // 更新当前任务状态
+        task.setActive(active);
+        this.updateById(task);
+
+        // 级联逻辑：使用递归实现
+        // 任务启停时，所有子任务跟着一起动
+        List<Task> subTasks = this.query().eq("parent_id", taskId).list();
+        for (Task subTask : subTasks) {
+            toggleActive(subTask.getTaskId(), active);
+        }
     }
 
 }

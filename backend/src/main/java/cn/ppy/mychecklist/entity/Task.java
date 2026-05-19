@@ -10,6 +10,21 @@ import java.time.LocalDateTime;
 @TableName("task")
 public class Task {
 
+    // 任务类型常量
+    public static final int TYPE_SIMPLE_TASK = 0; // 随手记
+    public static final int TYPE_PERIODIC_TASK = 1; // 周期任务
+    public static final int TYPE_DDL_TASK = 2; // DDL
+    public static final int TYPE_SCENE_TASK = 3; // 场景
+
+    // 结算类型常量
+    public static final int SETTLEMENT_MANUAL = 0; // 手动结算
+    public static final int SETTLEMENT_AUTO = 1; // 自动结算
+
+    // 运行状态常量
+    public static final int STATUS_NOT_STARTED = 0; // 未开始
+    public static final int STATUS_IN_PROGRESS = 1; // 进行中
+    public static final int STATUS_PAUSED = 2; // 暂停
+
     @TableId(type = IdType.AUTO)
     private Long taskId;
 

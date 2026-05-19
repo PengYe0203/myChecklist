@@ -12,6 +12,17 @@ import java.time.LocalDateTime;
 @TableName("task_log")
 public class TaskLog {
 
+    // 结果状态常量
+    public static final int RESULT_NOT_STARTED = 0; // 未开始
+    public static final int RESULT_INCOMPLETE = 1; // 未完成
+    public static final int RESULT_COMPLETED = 2; // 达标
+    public static final int RESULT_EXCEEDED = 3; // 超额完成
+
+    // 运行状态常量
+    public static final int STATUS_NOT_STARTED = 0; // 未开始
+    public static final int STATUS_IN_PROGRESS = 1; // 进行中
+    public static final int STATUS_PAUSED = 2; // 暂停
+
     @TableId(type = IdType.AUTO)
     private Long logId;
 
