@@ -1,6 +1,5 @@
 package cn.ppy.mychecklist.service.impl;
 
-import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.mapper.TaskMapper;
@@ -10,7 +9,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service

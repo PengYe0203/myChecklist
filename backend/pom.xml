@@ -18,7 +18,7 @@
         <spring-cloud.version>2023.0.3</spring-cloud.version>
     </properties>
     <dependencies>
-        <!-- 1. Web 与 参数校验 -->
+        <!-- Web 与 参数校验 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -28,7 +28,7 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- 2. 数据库与持久层 (MP + JDBC + MySQL) -->
+        <!-- 数据库与持久层 (MP + JDBC + MySQL) -->
         <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
@@ -44,7 +44,7 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- 3. Redis 与 Session 管理  -->
+        <!-- Redis 与 Session 管理  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
@@ -54,19 +54,19 @@
             <artifactId>spring-session-data-redis</artifactId>
         </dependency>
 
-        <!-- 4. 消息队列 Kafka  -->
+        <!-- 消息队列 Kafka  -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
-        <!-- 5. 安全与权限  -->
+        <!-- 安全与权限  -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
-        <!-- 6. Spring Cloud 微服务组件 (适配 Spring MVC 环境的 Gateway) -->
+        <!-- Spring Cloud 微服务组件 (适配 Spring MVC 环境的 Gateway) -->
         <!-- 暂时注释掉，之后再考虑加上
         <dependency>
             <groupId>org.springframework.cloud</groupId>
@@ -90,7 +90,7 @@
         </dependency>
         -->
 
-        <!-- 7. 辅助工具与监控 -->
+        <!-- 辅助工具与监控 -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -101,7 +101,7 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- 8. 测试支持 -->
+        <!-- 测试支持 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
@@ -111,6 +111,25 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
+        </dependency>
+        
+        <!-- JWT 支持 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.11.5</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.11.5</version>
+            <scope>runtime</scope>
         </dependency>
     </dependencies>
 
