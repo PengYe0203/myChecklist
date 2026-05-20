@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 
@@ -12,6 +13,7 @@ import cn.ppy.mychecklist.mapper.UserMapper;
 import cn.ppy.mychecklist.service.UserService;
 import cn.ppy.mychecklist.util.JwtUtils;
 
+@Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
 
     @Autowired
