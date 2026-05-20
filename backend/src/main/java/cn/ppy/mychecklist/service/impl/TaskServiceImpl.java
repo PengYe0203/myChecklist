@@ -8,30 +8,40 @@ import cn.ppy.mychecklist.service.TaskService;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements TaskService {
 
+    private Long getCurrentUserId(){
+        return (Long) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+    }
+
     @Override
     public List<Task> getAllTasks() {
-        Long currentUser = 1L; // TODO: 之后实现登录系统后再获取当前用户ID
+        Long currentUser = this.getCurrentUserId();
         return this.query().eq("user_id", currentUser).list();
     }
 
     @Override
     public String createTask(Task task) {
-        Long currentUser = 1L; // TODO: 之后实现登录系统后再获取当前用户ID
+        Long currentUser = this.getCurrentUserId();
         task.setUserId(currentUser);
         task.setCreateTime(LocalDateTime.now());
-
 
         return this.save(task) ? "创建成功" : "创建失败";
     }
 
     @Override
     public String updateTask(Task task) {
+        Task oldTask = this.query()
+                .eq("task_id", task.getTaskId())
+                .eq("user_id", this.getCurrentUserId())
+                .one();
+
+        if(oldTask == null) return "更新失败：任务不存在或不属于当前用户";
         return this.updateById(task) ? "更新成功" : "更新失败";
     }
 
