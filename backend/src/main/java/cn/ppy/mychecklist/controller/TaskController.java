@@ -2,6 +2,8 @@ package cn.ppy.mychecklist.controller;
 
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.service.TaskService;
+import cn.ppy.mychecklist.util.Result;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -18,23 +20,36 @@ public class TaskController {
     private TaskService taskService;
 
     @GetMapping("/getAllTasks")
-    public List<Task> getAllTasks() {
-        return taskService.getAllTasks();
+    public Result<List<Task>> getAllTasks() {
+        List<Task> tasks = taskService.getAllTasks();
+        return Result.success(tasks); // 本来就可以是空的，不需要单独处理
     }
 
     @PostMapping("/createTask")
-    public String createTask(@RequestBody Task task) {
-        return taskService.createTask(task);
+    public Result<String> createTask(@RequestBody Task task) {
+        String msg = taskService.createTask(task);
+        if(msg.contains("成功")) {
+            return Result.success(msg);
+        }
+        return Result.error(msg);
     }
 
     @PostMapping("/updateTask")
-    public String updateTask(@RequestBody Task task) {
-        return taskService.updateTask(task);
+    public Result<String> updateTask(@RequestBody Task task) {
+        String msg = taskService.updateTask(task);
+        if(msg.contains("成功")) {
+            return Result.success(msg);
+        }
+        return Result.error(msg);
     }
 
     @PostMapping("/delete/{id}")
-    public String deleteTask(@PathVariable Long id) {
-        return taskService.deleteTask(id);
+    public Result<String> deleteTask(@PathVariable Long id) {
+        String msg = taskService.deleteTask(id);
+        if(msg.contains("成功")) {
+            return Result.success(msg);
+        }
+        return Result.error(msg);
     }
 
 }
