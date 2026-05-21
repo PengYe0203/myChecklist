@@ -129,13 +129,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if(task == null) return; // 任务不存在，直接返回
 
         processComplete(task, complete, context); //处理本节点
-        processChildrenComplete(taskId, complete, context); //处理子节点
 
         if(complete) {
             //如果是完成操作，向上检查父节点是否也要完成
             checkAndCompleteParent(task.getParentId(), context);
+            // 在完成父任务时，也一起完成子任务
+            // 父任务重置时，已完成的子任务不该被抹杀，所以只放在这
+            processChildrenComplete(taskId, complete, context);
         }else{
             //如果是重置操作，向上取消父节点的完成状态
+            //重置操作不向下传递
             cancelParentComplete(task.getParentId(), context);
         }
 
@@ -168,7 +171,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     // 递归处理子任务的完成状态
-    // 父任务完成，子任务也完成；父任务重置，子任务也重置
+    // 父任务完成，子任务也完成
     private void processChildrenComplete(Long parentId, boolean complete, TaskTreeContext context) {
         for(Task child: context.getChildren(parentId)) {
             processComplete(child, complete, context);
