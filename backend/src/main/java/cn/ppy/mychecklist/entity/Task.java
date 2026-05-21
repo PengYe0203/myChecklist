@@ -46,9 +46,9 @@ public class Task {
 
     private Integer targetDuration; // 单位为秒
 
-    private LocalDateTime startTime;
+    private LocalDateTime startTime; // 计划开始时间
 
-    private LocalDateTime endTime;
+    private LocalDateTime endTime; // 计划完成时间
 
     private String cronConfig; // 用于周期任务的cron表达式
 

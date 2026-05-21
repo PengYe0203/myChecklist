@@ -52,4 +52,15 @@ public class TaskController {
         return Result.error(msg);
     }
 
+    @PostMapping("/toggleActive/{id}")
+    public Result<String> toggleActive(@PathVariable Long id, @RequestParam boolean active) {
+        taskService.toggleActive(id, active);
+        return Result.success("状态切换成功");
+    }
+
+    @PostMapping("/toggleComplete/{id}")
+    public Result<String> toggleComplete(@PathVariable Long id, @RequestParam boolean complete) {
+        taskService.toggleComplete(id, complete);
+        return Result.success(complete? "已完成": "已重置");
+    }
 }
