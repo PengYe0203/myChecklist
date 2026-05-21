@@ -1,4 +1,4 @@
-package cn.ppy.mychecklist.exception;
+package cn.ppy.mychecklist.config;
 
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestController;

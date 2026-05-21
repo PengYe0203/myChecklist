@@ -15,10 +15,10 @@ public class Result<T> {
     }
 
     public static <T> Result<T> success(T data) {
-        return new Result(200, "Success", data);
+        return new Result<T>(200, "Success", data);
     }
 
     public static <T> Result<T> error(String message) {
-        return new Result(500, message, null);
+        return new Result<T>(500, message, null);
     }
 }
