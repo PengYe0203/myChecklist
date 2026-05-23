@@ -22,8 +22,13 @@ create table task (
   start_time DATETIME,
   end_time DATETIME,
   cron_config VARCHAR(100),
-  due DATETIME,
+  actual_duration INT DEFAULT 0,
+  run_status INT DEFAULT 0 COMMENT '0-stopped 1-running 2-suspended',
+  last_start_time DATETIME,
   is_active TINYINT(1) DEFAULT 0 COMMENT '0-inactive 1-active',
+  own_duration INT DEFAULT 0,
+  sub_duration_sum INT DEFAULT 0,
+  inherit_parent_time TINYINT(1) DEFAULT 1,
   INDEX idx_user_id (user_id)
 );
 
@@ -49,7 +54,3 @@ CREATE TABLE review (
     content TEXT,
     UNIQUE KEY uk_user_date (user_id, date)
 );
-
-ALTER TABLE task ADD COLUMN actual_duration INT DEFAULT 0;
-ALTER TABLE task ADD COLUMN run_status INT DEFAULT 0 COMMENT '0-stopped 1-running 2-suspended';
-ALTER TABLE task ADD COLUMN last_start_time DATETIME;

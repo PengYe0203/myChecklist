@@ -58,6 +58,28 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setUserId(currentUser);
         task.setCreateTime(LocalDateTime.now());
 
+        // 默认初始化值
+        if(task.getIsCompleted() == null) task.setIsCompleted(false);
+        if(task.getOwnDuration() == null) task.setOwnDuration(0);
+        if(task.getSubDurationSum() == null) task.setSubDurationSum(0);
+        if(task.getActualDuration() == null) task.setActualDuration(0);
+        if(task.getRunStatus() == null) task.setRunStatus(Task.STATUS_NOT_STARTED);
+
+        // 处理继承逻辑：如果有父任务，且未手动指定继承开关，则默认不开启
+        if(task.getParentId() != null && task.getParentId() != 0) {
+            if(task.getInheritParentTime() == null) {
+                task.setInheritParentTime(false);
+            }
+            
+            Task parent = this.getById(task.getParentId());
+            if(parent != null) {
+                // 如果用户没填，默认继承父任务的上下文（完成时间、开始时间、周期配置）
+                if(task.getEndTime() == null) task.setEndTime(parent.getEndTime());
+                if(task.getStartTime() == null) task.setStartTime(parent.getStartTime());
+                if(task.getCronConfig() == null) task.setCronConfig(parent.getCronConfig());
+            }
+        }
+
         return this.save(task) ? "创建成功" : "创建失败";
     }
 
@@ -102,47 +124,143 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Override
     @Transactional
     public void toggleRunStatus(Long taskId, int newStatus) {
-        Task task = this.getById(taskId);
-        if (task == null) return; // 任务不存在，直接返回
+        TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
+        Task task = context.getTask(taskId);
+        if (task == null) return;
 
         int curStatus = task.getRunStatus();
         LocalDateTime now = LocalDateTime.now();
-        if(curStatus == Task.STATUS_IN_PROGRESS && newStatus != Task.STATUS_IN_PROGRESS) {
-            // 从进行中切换到暂停，计算实际持续时间
-            long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
-            int actualDuration = task.getActualDuration() == null ? 0 : task.getActualDuration();
-            task.setActualDuration(actualDuration + (int) duration);
-        } else if(curStatus != Task.STATUS_IN_PROGRESS && newStatus == Task.STATUS_IN_PROGRESS) {
-            // 从暂停/未开始切换到进行中，开始记录开始时间
-            task.setLastStartTime(LocalDateTime.now());
+
+        if (curStatus == Task.STATUS_IN_PROGRESS && newStatus != Task.STATUS_IN_PROGRESS) {
+            // 级联停止所有子项
+            cascadePauseChildren(taskId, newStatus, context);
+            // 停掉并结算自身
+            stopTaskTimer(task, newStatus, now, context);
+        } else if (curStatus != Task.STATUS_IN_PROGRESS && newStatus == Task.STATUS_IN_PROGRESS) {
+            // 开始计时
+            task.setLastStartTime(now);
+            task.setRunStatus(newStatus);
+            context.markModified(task);
+
+            // 自动开始父任务
+            activateParentSequentially(task.getParentId(), context);
         }
 
+        this.updateBatchById(context.getModifiedTasks());
+    }
+
+    private void stopTaskTimer(Task task, int newStatus, LocalDateTime now, TaskTreeContext context) {
+        if (task.getRunStatus() != Task.STATUS_IN_PROGRESS) return;
+
+        // 计算流逝时间
+        long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
+        int seconds = (int) duration;
+
+        // 更新时长字段
+        int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
+        task.setOwnDuration(own + seconds);
+        updateActualDuration(task); 
+        
         task.setRunStatus(newStatus);
-        this.updateById(task);
+        context.markModified(task);
+
+        // 如果开启了继承，向上同步
+        if (Boolean.TRUE.equals(task.getInheritParentTime())) {
+            updateParentSubDuration(task.getParentId(), seconds, context);
+        }
+    }
+
+    private void cascadePauseChildren(Long parentId, int newStatus, TaskTreeContext context) {
+        LocalDateTime now = LocalDateTime.now();
+        for(Task child: context.getChildren(parentId)) {
+            // 先向下递归，让更深层的子任务先结算
+            cascadePauseChildren(child.getTaskId(), newStatus, context);
+            // 当前 child 拿到了所有后代贡献的最新时长后，再结算自身
+            stopTaskTimer(child, newStatus, now, context);
+        }
+    }
+
+    private void activateParentSequentially(Long parentId, TaskTreeContext context) {
+        if (parentId == null || parentId == 0) return;
+        Task parent = context.getTask(parentId);
+        if (parent == null) return;
+
+        // 如果父任务是未开始状态，切换为进行中
+        if (parent.getRunStatus() == Task.STATUS_NOT_STARTED) {
+            parent.setRunStatus(Task.STATUS_IN_PROGRESS);
+            // 注意：不设置 lastStartTime，防止父任务产生虚假的 ownDuration
+            context.markModified(parent);
+
+            // 继续向上递归激活，确保整个任务链条在视觉上都处于“动工”状态
+            activateParentSequentially(parent.getParentId(), context);
+        }
+    }
+
+    private void updateActualDuration(Task task) {
+        int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
+        int sub = task.getSubDurationSum() == null ? 0 : task.getSubDurationSum();
+        task.setActualDuration(own + sub);
+    }
+
+    private void updateParentSubDuration(Long parentId, int seconds, TaskTreeContext context) {
+        if (parentId == null || parentId == 0) return;
+        Task parent = context.getTask(parentId);
+        if (parent == null) return;
+
+        int currentSub = parent.getSubDurationSum() == null ? 0 : parent.getSubDurationSum();
+        parent.setSubDurationSum(currentSub + seconds);
+        updateActualDuration(parent);
+        context.markModified(parent);
+
+        // 继续向上递归（只要子任务计入，父任务的父任务也会受影响）
+        updateParentSubDuration(parent.getParentId(), seconds, context);
     }
 
     @Override
     @Transactional
-    public void toggleComplete(Long taskId, boolean complete) {
+    public String toggleComplete(Long taskId, boolean complete) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if(task == null) return; // 任务不存在，直接返回
+        if(task == null) return "任务不存在"; 
 
         processComplete(task, complete, context); //处理本节点
 
+        String feedback = complete ? "已完成" : "已重置";
+
         if(complete) {
-            //如果是完成操作，向上检查父节点是否也要完成
-            checkAndCompleteParent(task.getParentId(), context);
-            // 在完成父任务时，也一起完成子任务
-            // 父任务重置时，已完成的子任务不该被抹杀，所以只放在这
+            if(task.getType() != null && task.getType() == Task.TYPE_SIMPLE_TASK) {
+                // 随手记：自动完成父任务
+                if(checkAndCompleteParent(task.getParentId(), context)) {
+                    feedback = "所有子项已完成，已为您自动完成父任务";
+                }
+            } else {
+                // 其它类型：由后端计算是否“建议完成”
+                if(shouldSuggestParentComplete(task.getParentId(), context)) {
+                    feedback = "SUGGEST_PARENT_COMPLETE"; // 这个暗号给前端，用来触发对话框
+                }
+            }
+            // 父任务完成，所有子任务也强制完成
             processChildrenComplete(taskId, complete, context);
         }else{
             //如果是重置操作，向上取消父节点的完成状态
-            //重置操作不向下传递
             cancelParentComplete(task.getParentId(), context);
         }
 
         this.updateBatchById(context.getModifiedTasks());
+        return feedback;
+    }
+
+    // 判断是否该弹出完成建议
+    private boolean shouldSuggestParentComplete(Long parentId, TaskTreeContext context) {
+        if(parentId == null || parentId == 0) return false;
+        Task parent = context.getTask(parentId);
+        if(parent == null || parent.getIsCompleted()) return false;
+
+        // 如果所有子任务都完成了，则返回 true
+        List<Task> children = context.getChildren(parentId);
+        if (children.isEmpty()) return false;
+        
+        return children.stream().allMatch(Task::getIsCompleted);
     }
 
     // 处理当前任务的完成状态
@@ -150,21 +268,23 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if(complete){ //任务完成，把运行状态切换到未开始，记录结束时间
             // 这里不能复用toggleRunStatus方法，因为它没有Context，每次调用都会查询数据库
             if(task.getRunStatus() == Task.STATUS_IN_PROGRESS) {
-                // 这里一定要检查是进行中
-                // 因为父任务完成时顺带修改子任务也会调用这个方法
-                // 如果子任务不是进行中状态，会导致错误更新
                 LocalDateTime now = LocalDateTime.now();
                 long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
-                int actualDuration = task.getActualDuration() == null ? 0 : task.getActualDuration();
-                task.setActualDuration(actualDuration + (int) duration);
+                int seconds = (int) duration;
+
+                // 更新自身时长
+                int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
+                task.setOwnDuration(own + seconds);
+                updateActualDuration(task);
+
+                // 同样要向上同步时长
+                if (Boolean.TRUE.equals(task.getInheritParentTime())) {
+                    updateParentSubDuration(task.getParentId(), seconds, context);
+                }
+                
                 task.setRunStatus(Task.STATUS_NOT_STARTED);
             }
-
         }
-
-        // 任务重置不错处理，尽管重置实际用时是一个考量
-        // 但是考虑到那些手动验收的任务，用户可能原本觉得完成了，但一段时间后又反悔
-        // 这种情况下保留实际用时是更合理的
 
         task.setIsCompleted(complete);
         context.markModified(task);
@@ -180,22 +300,25 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     // 向上递归检查父任务是否需要完成
-    private void checkAndCompleteParent(Long parentId, TaskTreeContext context) {
+    private boolean checkAndCompleteParent(Long parentId, TaskTreeContext context) {
         // 没有父任务了，停止递归
-        if(parentId == null || parentId == 0) return; 
+        if(parentId == null || parentId == 0) return false; 
 
-        // 父任务不存在或已完成，停止递归
         Task parent = context.getTask(parentId);
-        if(parent == null || parent.getIsCompleted()) return; 
+        // 父任务不存在、已完成，或者父任务不是“随手记”类型，则停止
+        if(parent == null || parent.getIsCompleted() || 
+           parent.getType() == null || parent.getType() != Task.TYPE_SIMPLE_TASK) return false; 
 
-        // 如果父任务的所有子任务都完成了，才完成父任务
+        // 如果该随手记父任务的所有子任务都完成了，才自动完成父任务
         boolean allChildrenComplete = context.getChildren(parentId).stream()
                 .allMatch(Task::getIsCompleted);
 
         if(allChildrenComplete) {
-            processComplete(parent, true, context); //完成父任务
-            checkAndCompleteParent(parent.getParentId(), context); //继续向上检查
+            processComplete(parent, true, context); 
+            checkAndCompleteParent(parent.getParentId(), context); 
+            return true;
         }
+        return false;
     }
 
     // 如果子任务重置了，向上递归取消父任务的完成状态

@@ -60,7 +60,7 @@ public class TaskController {
 
     @PostMapping("/toggleComplete/{id}")
     public Result<String> toggleComplete(@PathVariable Long id, @RequestParam boolean complete) {
-        taskService.toggleComplete(id, complete);
-        return Result.success(complete? "已完成": "已重置");
+        String msg = taskService.toggleComplete(id, complete);
+        return Result.success(msg);
     }
 }

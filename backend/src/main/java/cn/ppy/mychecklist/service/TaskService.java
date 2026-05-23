@@ -10,7 +10,7 @@ public interface TaskService extends IService<Task> {
     void toggleActive(Long taskId, boolean active);
 
     void toggleRunStatus(Long taskId, int newStatus);
-    void toggleComplete(Long taskId, boolean complete);
+    String toggleComplete(Long taskId, boolean complete);
 
     List<Task> getAllTasks();
     String createTask(Task task);

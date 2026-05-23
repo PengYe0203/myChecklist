@@ -52,9 +52,13 @@ public class Task {
 
     private String cronConfig; // 用于周期任务的cron表达式
 
-    private LocalDateTime due; // DDL
+    private Integer actualDuration; // 有效总时长(秒)
 
-    private Integer actualDuration; // 实际持续时间，单位为秒
+    private Integer ownDuration; // 任务自身投入时长(秒)
+
+    private Integer subDurationSum; // 子任务累计投入时长(秒)
+
+    private Boolean inheritParentTime; // 是否计入父任务时长
 
     private Integer runStatus; // 运行状态：0-未开始，1-进行中，2-暂停
 
