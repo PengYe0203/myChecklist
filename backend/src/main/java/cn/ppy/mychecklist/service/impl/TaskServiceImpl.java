@@ -212,8 +212,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         updateActualDuration(parent);
         context.markModified(parent);
 
-        // 继续向上递归（只要子任务计入，父任务的父任务也会受影响）
-        updateParentSubDuration(parent.getParentId(), seconds, context);
+        // 继续向上递归
+        if (Boolean.TRUE.equals(parent.getInheritParentTime())) {
+            updateParentSubDuration(parent.getParentId(), seconds, context);
+        }
     }
 
     @Override
