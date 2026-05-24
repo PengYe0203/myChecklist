@@ -63,4 +63,10 @@ public class TaskController {
         String msg = taskService.toggleComplete(id, complete);
         return Result.success(msg);
     }
+
+    @PostMapping("/heartbeat/{id}")
+    public Result<String> heartbeat(@PathVariable Long id) {
+        taskService.heartbeat(id);
+        return Result.success("心跳同步成功");
+    }
 }

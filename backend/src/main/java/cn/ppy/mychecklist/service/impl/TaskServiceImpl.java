@@ -5,6 +5,7 @@ import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Collections;
@@ -14,12 +15,19 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements TaskService {
+
+    @Value("${checklist.heartbeat.timeout-threshold:300}")
+    private int timeoutThreshold;
+
+    @Value("${checklist.heartbeat.interval:60s}")
+    private Duration heartbeatInterval;
 
     // 任务树结构，方便级联操作，避免频繁查询数据库
     // 写成内部类可以保证只在涉及级联操作时构建，平时不维护，节省资源
@@ -133,7 +141,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
         if (curStatus == Task.STATUS_IN_PROGRESS && newStatus != Task.STATUS_IN_PROGRESS) {
             // 级联停止所有子项
-            cascadePauseChildren(taskId, newStatus, context);
+            cascadePauseChildren(taskId, newStatus, now, context);
             // 停掉并结算自身
             stopTaskTimer(task, newStatus, now, context);
         } else if (curStatus != Task.STATUS_IN_PROGRESS && newStatus == Task.STATUS_IN_PROGRESS) {
@@ -170,13 +178,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
     }
 
-    private void cascadePauseChildren(Long parentId, int newStatus, TaskTreeContext context) {
-        LocalDateTime now = LocalDateTime.now();
+    private void cascadePauseChildren(Long parentId, int newStatus, LocalDateTime stopTime, TaskTreeContext context) {
         for(Task child: context.getChildren(parentId)) {
             // 先向下递归，让更深层的子任务先结算
-            cascadePauseChildren(child.getTaskId(), newStatus, context);
+            cascadePauseChildren(child.getTaskId(), newStatus, stopTime, context);
             // 当前 child 拿到了所有后代贡献的最新时长后，再结算自身
-            stopTaskTimer(child, newStatus, now, context);
+            stopTaskTimer(child, newStatus, stopTime, context);
         }
     }
 
@@ -216,6 +223,47 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (Boolean.TRUE.equals(parent.getInheritParentTime())) {
             updateParentSubDuration(parent.getParentId(), seconds, context);
         }
+    }
+
+
+    @Override
+    @Transactional
+    public void heartbeat(Long taskId) {
+        TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
+        Task task = context.getTask(taskId);
+        if (task == null || task.getRunStatus() != Task.STATUS_IN_PROGRESS) return;
+
+        LocalDateTime now = LocalDateTime.now();
+        long seconds = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
+
+        // [超时保护逻辑] 
+        // 使用配置的阈值（默认300s/5分钟）
+        if (seconds > timeoutThreshold) {
+            LocalDateTime stopTime = task.getLastStartTime().plus(heartbeatInterval);
+            // 级联停止所有子项，结算时间统一为：父任务最后一次心跳起点 + 补偿间隔
+            cascadePauseChildren(taskId, Task.STATUS_PAUSED, stopTime, context);
+            // 停掉并结算自身
+            stopTaskTimer(task, Task.STATUS_PAUSED, stopTime, context);
+            
+            this.updateBatchById(context.getModifiedTasks());
+            return;
+        }
+
+        if (seconds <= 0) return;
+
+        // 正常心跳结算
+        int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
+        task.setOwnDuration(own + (int)seconds);
+        updateActualDuration(task);
+        
+        if (Boolean.TRUE.equals(task.getInheritParentTime())) {
+            updateParentSubDuration(task.getParentId(), (int)seconds, context);
+        }
+
+        // 滑动时间起点
+        task.setLastStartTime(now);
+        context.markModified(task);
+        this.updateBatchById(context.getModifiedTasks());
     }
 
     @Override
