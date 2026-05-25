@@ -1,6 +1,7 @@
 package cn.ppy.mychecklist.component;
 
 import cn.ppy.mychecklist.entity.Task;
+import cn.ppy.mychecklist.enums.RunStatusType;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -35,7 +36,7 @@ public class TaskGuardian {
         LocalDateTime now = LocalDateTime.now();
         // 找出所有正在运行的任务
         List<Task> runningTasks = taskMapper.selectList(
-            new LambdaQueryWrapper<Task>().eq(Task::getRunStatus, Task.STATUS_IN_PROGRESS)
+            new LambdaQueryWrapper<Task>().eq(Task::getRunStatus, RunStatusType.IN_PROGRESS)
         );
 
         for (Task task : runningTasks) {
@@ -44,7 +45,7 @@ public class TaskGuardian {
                 java.time.Duration.between(task.getLastStartTime(), now).getSeconds() > timeoutThreshold) {
                 
                 // 强制触发暂停逻辑，调用toggleRunStatus处理级联
-                taskService.toggleRunStatus(task.getTaskId(), Task.STATUS_PAUSED);
+                taskService.toggleRunStatus(task.getTaskId(), RunStatusType.PAUSED);
                 
                 System.out.println("Guardian: 任务 [" + task.getTitle() + "] 心跳超时，已自动暂停。");
             }

@@ -2,6 +2,8 @@ package cn.ppy.mychecklist.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import cn.ppy.mychecklist.entity.Task;
+import cn.ppy.mychecklist.enums.RunStatusType;
+import cn.ppy.mychecklist.enums.TaskType;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
 
@@ -71,7 +73,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if(task.getOwnDuration() == null) task.setOwnDuration(0);
         if(task.getSubDurationSum() == null) task.setSubDurationSum(0);
         if(task.getActualDuration() == null) task.setActualDuration(0);
-        if(task.getRunStatus() == null) task.setRunStatus(Task.STATUS_NOT_STARTED);
+        if(task.getRunStatus() == null) task.setRunStatus(RunStatusType.NOT_STARTED);
 
         // 处理继承逻辑：如果有父任务，且未手动指定继承开关，则默认不开启
         if(task.getParentId() != null && task.getParentId() != 0) {
@@ -131,20 +133,20 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     @Transactional
-    public void toggleRunStatus(Long taskId, int newStatus) {
+    public void toggleRunStatus(Long taskId, RunStatusType newStatus) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
         if (task == null) return;
 
-        int curStatus = task.getRunStatus();
+        RunStatusType curStatus = task.getRunStatus();
         LocalDateTime now = LocalDateTime.now();
 
-        if (curStatus == Task.STATUS_IN_PROGRESS && newStatus != Task.STATUS_IN_PROGRESS) {
+        if (curStatus == RunStatusType.IN_PROGRESS && newStatus != RunStatusType.IN_PROGRESS) {
             // 级联停止所有子项
             cascadePauseChildren(taskId, newStatus, now, context);
             // 停掉并结算自身
             stopTaskTimer(task, newStatus, now, context);
-        } else if (curStatus != Task.STATUS_IN_PROGRESS && newStatus == Task.STATUS_IN_PROGRESS) {
+        } else if (curStatus != RunStatusType.IN_PROGRESS && newStatus == RunStatusType.IN_PROGRESS) {
             // 开始计时
             task.setLastStartTime(now);
             task.setRunStatus(newStatus);
@@ -157,8 +159,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         this.updateBatchById(context.getModifiedTasks());
     }
 
-    private void stopTaskTimer(Task task, int newStatus, LocalDateTime now, TaskTreeContext context) {
-        if (task.getRunStatus() != Task.STATUS_IN_PROGRESS) return;
+    private void stopTaskTimer(Task task, RunStatusType newStatus, LocalDateTime now, TaskTreeContext context) {
+        if (task.getRunStatus() != RunStatusType.IN_PROGRESS) return;
 
         // 计算流逝时间
         long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
@@ -178,7 +180,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
     }
 
-    private void cascadePauseChildren(Long parentId, int newStatus, LocalDateTime stopTime, TaskTreeContext context) {
+    private void cascadePauseChildren(Long parentId, RunStatusType newStatus, LocalDateTime stopTime, TaskTreeContext context) {
         for(Task child: context.getChildren(parentId)) {
             // 先向下递归，让更深层的子任务先结算
             cascadePauseChildren(child.getTaskId(), newStatus, stopTime, context);
@@ -193,8 +195,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (parent == null) return;
 
         // 如果父任务是未开始状态，切换为进行中
-        if (parent.getRunStatus() == Task.STATUS_NOT_STARTED) {
-            parent.setRunStatus(Task.STATUS_IN_PROGRESS);
+        if (parent.getRunStatus() == RunStatusType.NOT_STARTED) {
+            parent.setRunStatus(RunStatusType.IN_PROGRESS);
             // 注意：不设置 lastStartTime，防止父任务产生虚假的 ownDuration
             context.markModified(parent);
 
@@ -231,7 +233,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public void heartbeat(Long taskId) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if (task == null || task.getRunStatus() != Task.STATUS_IN_PROGRESS) return;
+        if (task == null || task.getRunStatus() != RunStatusType.IN_PROGRESS) return;
 
         LocalDateTime now = LocalDateTime.now();
         long seconds = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
@@ -241,9 +243,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (seconds > timeoutThreshold) {
             LocalDateTime stopTime = task.getLastStartTime().plus(heartbeatInterval);
             // 级联停止所有子项，结算时间统一为：父任务最后一次心跳起点 + 补偿间隔
-            cascadePauseChildren(taskId, Task.STATUS_PAUSED, stopTime, context);
+            cascadePauseChildren(taskId, RunStatusType.PAUSED, stopTime, context);
             // 停掉并结算自身
-            stopTaskTimer(task, Task.STATUS_PAUSED, stopTime, context);
+            stopTaskTimer(task, RunStatusType.PAUSED, stopTime, context);
             
             this.updateBatchById(context.getModifiedTasks());
             return;
@@ -278,7 +280,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         String feedback = complete ? "已完成" : "已重置";
 
         if(complete) {
-            if(task.getType() != null && task.getType() == Task.TYPE_SIMPLE_TASK) {
+            if(task.getType() != null && task.getType() == TaskType.NOTE) {
                 // 随手记：自动完成父任务
                 if(checkAndCompleteParent(task.getParentId(), context)) {
                     feedback = "所有子项已完成，已为您自动完成父任务";
@@ -317,7 +319,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private void processComplete(Task task, boolean complete, TaskTreeContext context) {
         if(complete){ //任务完成，把运行状态切换到未开始，记录结束时间
             // 这里不能复用toggleRunStatus方法，因为它没有Context，每次调用都会查询数据库
-            if(task.getRunStatus() == Task.STATUS_IN_PROGRESS) {
+            if(task.getRunStatus() == RunStatusType.IN_PROGRESS) {
                 LocalDateTime now = LocalDateTime.now();
                 long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
                 int seconds = (int) duration;
@@ -332,7 +334,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                     updateParentSubDuration(task.getParentId(), seconds, context);
                 }
                 
-                task.setRunStatus(Task.STATUS_NOT_STARTED);
+                task.setRunStatus(RunStatusType.NOT_STARTED);
             }
         }
 
@@ -357,7 +359,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         Task parent = context.getTask(parentId);
         // 父任务不存在、已完成，或者父任务不是“随手记”类型，则停止
         if(parent == null || parent.getIsCompleted() || 
-           parent.getType() == null || parent.getType() != Task.TYPE_SIMPLE_TASK) return false; 
+           parent.getType() == null || parent.getType() != TaskType.NOTE) return false; 
 
         // 如果该随手记父任务的所有子任务都完成了，才自动完成父任务
         boolean allChildrenComplete = context.getChildren(parentId).stream()
