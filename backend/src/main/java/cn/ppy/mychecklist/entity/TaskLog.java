@@ -33,5 +33,5 @@ public class TaskLog {
     //task的执行结果
     private Integer actualDuration;
     private LocalDateTime actualStartTime;
-    private LogResultStatus resultStatus; // 0-未开始 1-未完成 2-达标 3-超额完成
+    private LogResultStatus resultStatus; // 0-未开始 1-未完成 2-完成 3-超时完成
 }
