@@ -112,6 +112,42 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     @Override
     @Transactional
+    public String resetTask(Long taskId) {
+        TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
+        Task task = context.getTask(taskId);
+        if (task == null) return "任务不存在";
+
+        //重置该任务及其所有子任务的时长和完成状态
+        cascadeReset(taskId, context);
+
+        this.updateBatchById(context.getModifiedTasks());
+        return "任务及子项已重置";
+    }
+
+    private void cascadeReset(Long taskId, TaskTreeContext context) {
+        Task task = context.getTask(taskId);
+        if (task == null) return;
+
+        //重置运行状态和完成状态
+        task.setRunStatus(RunStatusType.NOT_STARTED);
+        task.setIsCompleted(false);
+
+        //重置时间上下文
+        task.setOwnDuration(0);
+        task.setSubDurationSum(0);
+        task.setActualDuration(0);
+        task.setLastStartTime(null);
+        
+        context.markModified(task);
+
+        //向下级联
+        for (Task child : context.getChildren(taskId)) {
+            cascadeReset(child.getTaskId(), context);
+        }
+    }
+
+    @Override
+    @Transactional
     public void toggleActive(Long taskId, boolean active) {
         //这是Controller调用的方法
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());

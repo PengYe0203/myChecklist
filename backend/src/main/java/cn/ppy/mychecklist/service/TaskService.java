@@ -24,4 +24,6 @@ public interface TaskService extends IService<Task> {
     
     String deleteTask(Long id);
 
+    String resetTask(Long taskId);
+
 }

@@ -52,6 +52,12 @@ public class TaskController {
         return Result.error(msg);
     }
 
+    @PostMapping("/reset/{id}")
+    public Result<String> resetTask(@PathVariable Long id) {
+        String msg = taskService.resetTask(id);
+        return Result.success(msg);
+    }
+
     @PostMapping("/toggleActive/{id}")
     public Result<String> toggleActive(@PathVariable Long id, @RequestParam boolean active) {
         taskService.toggleActive(id, active);
