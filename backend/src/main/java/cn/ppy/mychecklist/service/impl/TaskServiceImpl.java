@@ -11,6 +11,7 @@ import cn.ppy.mychecklist.util.CronUtils;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
@@ -107,8 +108,22 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     @Override
+    @Transactional
     public String deleteTask(Long id) {
-        return this.removeById(id) ? "删除成功" : "删除失败";
+        TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
+        if (context.getTask(id) == null) return "删除失败：任务不存在或无权限";
+
+        List<Long> idsToDelete = new ArrayList<>();
+        cascadeDelete(id, idsToDelete, context);
+
+        return this.removeByIds(idsToDelete) ? "删除成功" : "删除失败";
+    }
+
+    private void cascadeDelete(Long id, List<Long> list, TaskTreeContext context) {
+        list.add(id);
+        for (Task child : context.getChildren(id)) {
+            cascadeDelete(child.getTaskId(), list, context);
+        }
     }
 
     @Override
