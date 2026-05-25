@@ -3,6 +3,7 @@ package cn.ppy.mychecklist.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.enums.RunStatusType;
+import cn.ppy.mychecklist.enums.SettlementType;
 import cn.ppy.mychecklist.enums.TaskType;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
@@ -266,6 +267,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setLastStartTime(now);
         context.markModified(task);
         this.updateBatchById(context.getModifiedTasks());
+
+        // [自动结项逻辑] 
+        // 如果是自动结算任务，且目标时长已达成，则触发自动完成
+        if (parentAndTaskReadyForAutoComplete(task)) {
+            this.toggleComplete(taskId, true);
+        }
+    }
+
+    private boolean parentAndTaskReadyForAutoComplete(Task task) {
+        return task.getSettlementType() == SettlementType.AUTO 
+            && task.getTargetDuration() != null 
+            && task.getTargetDuration() > 0 
+            && task.getActualDuration() >= task.getTargetDuration();
     }
 
     @Override
@@ -280,21 +294,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         String feedback = complete ? "已完成" : "已重置";
 
         if(complete) {
-            if(task.getType() != null && task.getType() == TaskType.NOTE) {
-                // 随手记：自动完成父任务
-                if(checkAndCompleteParent(task.getParentId(), context)) {
-                    feedback = "所有子项已完成，已为您自动完成父任务";
-                }
-            } else {
-                // 其它类型：由后端计算是否“建议完成”
-                if(shouldSuggestParentComplete(task.getParentId(), context)) {
-                    feedback = "SUGGEST_PARENT_COMPLETE"; // 这个暗号给前端，用来触发对话框
-                }
-            }
-            // 父任务完成，所有子任务也强制完成
+            //向下级联：如果手动完成了一个父任务，强制完成其所有子任务
             processChildrenComplete(taskId, complete, context);
-        }else{
-            //如果是重置操作，向上取消父节点的完成状态
+
+            //向上追溯：根据新逻辑判定父任务是否该跟着完成
+            feedback = resolveCompletionUpward(task.getParentId(), context, feedback);
+        } else {
+            // 重置逻辑：向上取消父节点的完成状态
             cancelParentComplete(task.getParentId(), context);
         }
 
@@ -302,23 +308,50 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         return feedback;
     }
 
-    // 判断是否该弹出完成建议
-    private boolean shouldSuggestParentComplete(Long parentId, TaskTreeContext context) {
-        if(parentId == null || parentId == 0) return false;
-        Task parent = context.getTask(parentId);
-        if(parent == null || parent.getIsCompleted()) return false;
 
-        // 如果所有子任务都完成了，则返回 true
+    //实现新设计的向上追溯完成逻辑
+    private String resolveCompletionUpward(Long parentId, TaskTreeContext context, String currentFeedback) {
+        if (parentId == null || parentId == 0) return currentFeedback;
+        Task parent = context.getTask(parentId);
+        if (parent == null || parent.getIsCompleted()) return currentFeedback;
+
+        // 检查所有兄弟任务是否都已经完成
         List<Task> children = context.getChildren(parentId);
-        if (children.isEmpty()) return false;
-        
-        return children.stream().allMatch(Task::getIsCompleted);
+        boolean allFinished = children.stream().allMatch(Task::getIsCompleted);
+        // 如果兄弟任务还没全部完成，则无论父任务是什么类型，都不触发后续逻辑
+        if (!allFinished) return currentFeedback;
+
+        //此时所有兄弟任务都已完成
+        //如果父任务是随手记，直接完成并继续向上追溯
+        if (parent.getType() == TaskType.NOTE) {
+            processComplete(parent, true, context);
+            return resolveCompletionUpward(parent.getParentId(), context, "所有子项已完成，已为您自动完成父任务");
+        }
+
+        //如果父任务是自动确认的周期任务，检查用时是否抵达要求
+        if (parent.getSettlementType() == SettlementType.AUTO) {
+            int target = parent.getTargetDuration() == null ? 0 : parent.getTargetDuration();
+            int actual = parent.getActualDuration() == null ? 0 : parent.getActualDuration();
+            if (actual >= target) {
+                processComplete(parent, true, context);
+                return resolveCompletionUpward(parent.getParentId(), context, "目标时长已达成，已为您自动完成父任务");
+            }
+            // 用时未抵达要求，不自动完成，也不弹出询问（等待心跳或后续操作）
+            return currentFeedback;
+        }
+
+        //如果父任务是手动确认的周期任务，返回暗号询问用户
+        if (parent.getSettlementType() == SettlementType.MANUAL) {
+            return "SUGGEST_PARENT_COMPLETE";
+        }
+
+        return currentFeedback;
     }
 
     // 处理当前任务的完成状态
     private void processComplete(Task task, boolean complete, TaskTreeContext context) {
         if(complete){ //任务完成，把运行状态切换到未开始，记录结束时间
-            // 这里不能复用toggleRunStatus方法，因为它没有Context，每次调用都会查询数据库
+            // 这里不能复用toggleRunStatus方法，因为涉及了级联操作，本方法只关注单个任务的完成
             if(task.getRunStatus() == RunStatusType.IN_PROGRESS) {
                 LocalDateTime now = LocalDateTime.now();
                 long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
@@ -329,7 +362,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 task.setOwnDuration(own + seconds);
                 updateActualDuration(task);
 
-                // 同样要向上同步时长
+                // 向上同步时长
                 if (Boolean.TRUE.equals(task.getInheritParentTime())) {
                     updateParentSubDuration(task.getParentId(), seconds, context);
                 }
@@ -349,28 +382,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             processComplete(child, complete, context);
             processChildrenComplete(child.getTaskId(), complete, context);
         }
-    }
-
-    // 向上递归检查父任务是否需要完成
-    private boolean checkAndCompleteParent(Long parentId, TaskTreeContext context) {
-        // 没有父任务了，停止递归
-        if(parentId == null || parentId == 0) return false; 
-
-        Task parent = context.getTask(parentId);
-        // 父任务不存在、已完成，或者父任务不是“随手记”类型，则停止
-        if(parent == null || parent.getIsCompleted() || 
-           parent.getType() == null || parent.getType() != TaskType.NOTE) return false; 
-
-        // 如果该随手记父任务的所有子任务都完成了，才自动完成父任务
-        boolean allChildrenComplete = context.getChildren(parentId).stream()
-                .allMatch(Task::getIsCompleted);
-
-        if(allChildrenComplete) {
-            processComplete(parent, true, context); 
-            checkAndCompleteParent(parent.getParentId(), context); 
-            return true;
-        }
-        return false;
     }
 
     // 如果子任务重置了，向上递归取消父任务的完成状态
