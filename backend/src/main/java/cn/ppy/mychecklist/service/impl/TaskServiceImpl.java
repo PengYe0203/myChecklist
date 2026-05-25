@@ -174,7 +174,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public void toggleRunStatus(Long taskId, RunStatusType newStatus) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if (task == null) return;
+        if (task == null || task.getType() == TaskType.SCENE) return;
 
         RunStatusType curStatus = task.getRunStatus();
         LocalDateTime now = LocalDateTime.now();
@@ -198,7 +198,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     private void stopTaskTimer(Task task, RunStatusType newStatus, LocalDateTime now, TaskTreeContext context) {
-        if (task.getRunStatus() != RunStatusType.IN_PROGRESS) return;
+        if (task.getRunStatus() != RunStatusType.IN_PROGRESS || task.getType() == TaskType.SCENE) return;
 
         // 计算流逝时间
         long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
@@ -230,7 +230,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private void activateParentSequentially(Long parentId, TaskTreeContext context) {
         if (parentId == null || parentId == 0) return;
         Task parent = context.getTask(parentId);
-        if (parent == null) return;
+        if (parent == null || parent.getType() == TaskType.SCENE) return;
 
         // 如果父任务是未开始状态，切换为进行中
         if (parent.getRunStatus() == RunStatusType.NOT_STARTED) {
@@ -252,7 +252,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private void updateParentSubDuration(Long parentId, int seconds, TaskTreeContext context) {
         if (parentId == null || parentId == 0) return;
         Task parent = context.getTask(parentId);
-        if (parent == null) return;
+        if (parent == null || parent.getType() == TaskType.SCENE) return;
 
         int currentSub = parent.getSubDurationSum() == null ? 0 : parent.getSubDurationSum();
         parent.setSubDurationSum(currentSub + seconds);
@@ -271,7 +271,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public void heartbeat(Long taskId) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if (task == null || task.getRunStatus() != RunStatusType.IN_PROGRESS) return;
+        if (task == null || task.getRunStatus() != RunStatusType.IN_PROGRESS || task.getType() == TaskType.SCENE) return;
 
         LocalDateTime now = LocalDateTime.now();
         long seconds = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
@@ -324,7 +324,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public String toggleComplete(Long taskId, boolean complete) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if(task == null) return "任务不存在"; 
+        if(task == null || task.getType() == TaskType.SCENE) return "任务不存在"; 
 
         processComplete(task, complete, context); //处理本节点
 
@@ -350,7 +350,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     private String resolveCompletionUpward(Long parentId, TaskTreeContext context, String currentFeedback) {
         if (parentId == null || parentId == 0) return currentFeedback;
         Task parent = context.getTask(parentId);
-        if (parent == null || parent.getIsCompleted()) return currentFeedback;
+        if (parent == null || parent.getType() == TaskType.SCENE || parent.getIsCompleted()) return currentFeedback;
 
         // 检查所有兄弟任务是否都已经完成
         List<Task> children = context.getChildren(parentId);
@@ -387,6 +387,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
     // 处理当前任务的完成状态
     private void processComplete(Task task, boolean complete, TaskTreeContext context) {
+        if (task.getType() == TaskType.SCENE) return;
+
         if(complete){ //任务完成，把运行状态切换到未开始，记录结束时间
             // 这里不能复用toggleRunStatus方法，因为涉及了级联操作，本方法只关注单个任务的完成
             if(task.getRunStatus() == RunStatusType.IN_PROGRESS) {

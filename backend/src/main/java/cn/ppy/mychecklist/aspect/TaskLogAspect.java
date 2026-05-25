@@ -70,6 +70,9 @@ public class TaskLogAspect {
 
     //生成log
     private void doRecord(Task task) {
+        // 场景任务(SCENE)仅作为组织容器，没有时长和完成度指标，不记录日志
+        if (task.getType() == TaskType.SCENE) return;
+
         log.info("AOP: 正在为任务 [{}] 生成快照日志...", task.getTitle());
         
         //log本身信息：用户、任务、任务执行日期
