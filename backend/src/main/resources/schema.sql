@@ -37,12 +37,13 @@ create table task_log (
   task_id BIGINT NOT NULL,
   user_id BIGINT NOT NULL,
   date DATE NOT NULL,
-  result_status INT DEFAULT 0 COMMENT '0-not_started 1-incomplete 2-completed 3-Exceeded',
+  title VARCHAR(100),
+  type INT COMMENT '0-随手记 1-周期任务 2-DDL 3-场景',
   planned_duration INT,
+  parent_id BIGINT,
   actual_duration INT DEFAULT 0,
   actual_start_time DATETIME,
-  run_status INT DEFAULT 0 COMMENT '0-stopped 1-running 2-suspended',
-  last_start_time DATETIME,
+  result_status INT DEFAULT 0 COMMENT '0-未开始 1-未完成 2-完成 3-超时完成',
   INDEX idx_user_id (user_id),
   INDEX idx_task_id (task_id)
 );
@@ -52,5 +53,10 @@ CREATE TABLE review (
     user_id BIGINT NOT NULL,
     date DATE NOT NULL,
     content TEXT,
+    done_count INT DEFAULT 0,
+    total_count INT DEFAULT 0,
+    actual_duration_sum INT DEFAULT 0,
+    planned_duration_sum INT DEFAULT 0,
+    streak_days INT DEFAULT 0,
     UNIQUE KEY uk_user_date (user_id, date)
 );
