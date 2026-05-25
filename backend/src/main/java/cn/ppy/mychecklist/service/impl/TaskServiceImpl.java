@@ -7,6 +7,7 @@ import cn.ppy.mychecklist.enums.SettlementType;
 import cn.ppy.mychecklist.enums.TaskType;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.TaskService;
+import cn.ppy.mychecklist.util.CronUtils;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -275,8 +276,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         LocalDateTime now = LocalDateTime.now();
         long seconds = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
 
-        // [超时保护逻辑] 
-        // 使用配置的阈值（默认300s/5分钟）
+        // 超时保护逻辑
+        // 使用配置的阈值（默认300s）
         if (seconds > timeoutThreshold) {
             LocalDateTime stopTime = task.getLastStartTime().plus(heartbeatInterval);
             // 级联停止所有子项，结算时间统一为：父任务最后一次心跳起点 + 补偿间隔
@@ -304,7 +305,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         context.markModified(task);
         this.updateBatchById(context.getModifiedTasks());
 
-        // [自动结项逻辑] 
+        // 自动结项逻辑
         // 如果是自动结算任务，且目标时长已达成，则触发自动完成
         if (parentAndTaskReadyForAutoComplete(task)) {
             this.toggleComplete(taskId, true);
@@ -364,7 +365,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             return resolveCompletionUpward(parent.getParentId(), context, "所有子项已完成，已为您自动完成父任务");
         }
 
-        //如果父任务是自动确认的周期任务，检查用时是否抵达要求
+        //如果父任务是自动确认的任务，检查用时是否抵达要求
         if (parent.getSettlementType() == SettlementType.AUTO) {
             int target = parent.getTargetDuration() == null ? 0 : parent.getTargetDuration();
             int actual = parent.getActualDuration() == null ? 0 : parent.getActualDuration();
@@ -376,7 +377,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             return currentFeedback;
         }
 
-        //如果父任务是手动确认的周期任务，返回暗号询问用户
+        //如果父任务是手动确认的任务，返回暗号询问用户
         if (parent.getSettlementType() == SettlementType.MANUAL) {
             return "SUGGEST_PARENT_COMPLETE";
         }
@@ -433,6 +434,52 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         parent.setIsCompleted(false);
         context.markModified(parent);
         cancelParentComplete(parent.getParentId(), context); //继续向上取消
+    }
+
+    @Override
+    @Transactional
+    public void refreshTask(Long taskId) {
+        // 供NightlyProcessor调用，定期刷新周期任务
+        Task task = this.getById(taskId);
+        if (task == null || task.getType() != TaskType.RECURRING || task.getCronConfig() == null) return;
+        
+        LocalDateTime oldStartTime = task.getStartTime();
+        String cron = task.getCronConfig();
+
+        if (oldStartTime != null) {
+            // 获取当前周期的开始时间点
+            // 那些四点前的任务算前一天的任务
+            LocalDateTime referencePoint = oldStartTime.withHour(4).withMinute(0).withSecond(0).withNano(0);
+            if (oldStartTime.isBefore(referencePoint)) {
+                referencePoint = referencePoint.minusDays(1);
+            }
+
+            // 判断是否要刷新
+            if (!CronUtils.isExpired(cron, referencePoint)) {
+                return; 
+            }
+
+            LocalDateTime nextReferencePoint = CronUtils.getNextExecution(cron, referencePoint);
+            if (nextReferencePoint != null) {
+                //获取两个周期的时间差
+                //再应用到startTime和endTime，保证只有日期变化，而小时分钟不变
+                java.time.Duration gap = java.time.Duration.between(referencePoint, nextReferencePoint);
+                task.setStartTime(oldStartTime.plus(gap));
+                if (task.getEndTime() != null) {
+                    task.setEndTime(task.getEndTime().plus(gap));
+                }
+            }
+        }
+
+        // 刷新任务的时间上下文和状态
+        task.setRunStatus(RunStatusType.NOT_STARTED);
+        task.setIsCompleted(false);
+        task.setOwnDuration(0);
+        task.setSubDurationSum(0);
+        task.setActualDuration(0);
+        task.setLastStartTime(null);
+
+        this.updateById(task);
     }
 
 

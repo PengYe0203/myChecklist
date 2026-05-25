@@ -2,6 +2,9 @@ package cn.ppy.mychecklist.util;
 
 import lombok.Data;
 
+/*
+    统一API响应格式
+*/
 @Data
 public class Result<T> {
     private int code;
