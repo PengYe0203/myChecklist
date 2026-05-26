@@ -2,7 +2,10 @@ package cn.ppy.mychecklist.service.impl;
 
 import cn.ppy.mychecklist.entity.Review;
 import cn.ppy.mychecklist.entity.Task;
+import cn.ppy.mychecklist.entity.TaskLog;
+import cn.ppy.mychecklist.enums.LogResultStatus;
 import cn.ppy.mychecklist.mapper.ReviewMapper;
+import cn.ppy.mychecklist.mapper.TaskLogMapper;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.service.ReviewService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -26,15 +29,18 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
     @Autowired
     private TaskMapper taskMapper;
 
+    @Autowired
+    private TaskLogMapper taskLogMapper;
+
     @Override
     @Transactional
     public void generateDailyReport(LocalDate date, Long userId) {
-        // 获取所有活跃任务
-        List<Task> activeTasks = taskMapper.selectList(new LambdaQueryWrapper<Task>()
-                .eq(Task::getUserId, userId)
-                .eq(Task::isActive, true));
+        // 获取该用户在指定日期的所有日志
+        List<TaskLog> logs = taskLogMapper.selectList(new LambdaQueryWrapper<TaskLog>()
+            .eq(TaskLog::getUserId, userId)
+            .eq(TaskLog::getDate, date));
 
-        if (activeTasks.isEmpty()) {
+        if (logs.isEmpty()) {
             // 即便没有活跃任务，也要确保清空可能存在的残余执行片段
             clearAllTaskSegments(userId);
             return;
@@ -43,22 +49,28 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         List<int[]> allSegments = new ArrayList<>(); //所有时间片段，不区分任务
         long grossEffort = 0; //不去重的总时长
         int doneCount = 0; //完成的任务数
-        int activeCount = activeTasks.size(); //活跃的任务数
+        int requiredCount = 0; //需要完成的任务数
         int actualSum = 0; //实际总时长
         int targetSum = 0; //计划总时长
 
         // 片段格式为 [[s1,e1],[s2,e2]]
         Pattern p = Pattern.compile("\\[(\\d+),(\\d+)\\]");
         
-        for (Task task : activeTasks) {
-            if (Boolean.TRUE.equals(task.getIsCompleted())) doneCount++;
+        for (TaskLog log : logs) {
+            LogResultStatus status = log.getResultStatus();
+            if (status == LogResultStatus.COMPLETED || status == LogResultStatus.LATE_COMPLETED) {
+                doneCount++;
+            }
 
-            // 计划总时和实际总时
-            actualSum += (task.getActualDuration() != null ? task.getActualDuration() : 0);
-            targetSum += (task.getTargetDuration() != null ? task.getTargetDuration() : 0);
+            if (status != LogResultStatus.DEFERRED) {
+                requiredCount++;
+                // 计划总时和实际总时（仅统计需要完成的任务）
+                actualSum += (log.getDailyActualDuration() != null ? log.getDailyActualDuration() : 0);
+                targetSum += (log.getPlannedDuration() != null ? log.getPlannedDuration() : 0);
+            }
 
             // 收集并处理时间分布片段
-            String segmentsJson = task.getCurrentDaySegments();
+            String segmentsJson = log.getWorkSegments();
             if (segmentsJson != null && !segmentsJson.isEmpty() && !segmentsJson.equals("[]")) {
                 Matcher m = p.matcher(segmentsJson);
                 while (m.find()) {
@@ -80,7 +92,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         // 计算连续坚持天数 (Streak Days)
         // 只有当所有活跃任务都完成时，才增加连续天数
         int streak = 0;
-        if (doneCount == activeCount && activeCount > 0) { 
+        if (doneCount == requiredCount && requiredCount > 0) {
             // 查询昨天的记录
             Review yesterdayReview = this.lambdaQuery()
                     .eq(Review::getUserId, userId)
@@ -107,7 +119,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         }
 
         review.setDoneCount(doneCount);
-        review.setTotalCount(activeCount);
+        review.setTotalCount(requiredCount);
         review.setActualDurationSum(actualSum);
         review.setPlannedDurationSum(targetSum);
         review.setGrossEffort((int) grossEffort);

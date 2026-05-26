@@ -9,10 +9,8 @@ import cn.ppy.mychecklist.mapper.TaskLogMapper;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.util.CronUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.AfterReturning;
 import org.aspectj.lang.annotation.Aspect;
-import org.aspectj.lang.annotation.Before;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +18,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 任务日志切面
@@ -35,40 +36,22 @@ public class TaskLogAspect {
     @Autowired
     private TaskLogMapper taskLogMapper;
 
-    // 周期触发：发生在refreshTask之前，针对周期性任务
-    @Before("execution(* ..TaskService.refreshTask(..)) && args(taskId)")
-    public void recordLogBeforeRefresh(JoinPoint joinPoint, Long taskId) {
-        Task task = taskMapper.selectById(taskId);
-        if (task == null) return;
+    // 跨天的时候为所有任务都生成日志，记录任务的执行结果
+    @AfterReturning(pointcut = "execution(* ..TaskService.settleRunningTasks(..)) && args(userId)")
+    public void recordLogAfterSettlement(Long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime boundary = now.withHour(4).withMinute(0).withSecond(0).withNano(0);
+        if (now.isBefore(boundary)) boundary = boundary.minusDays(1);
+        LocalDate logDate = boundary.minusDays(1).toLocalDate();
 
-        // 只有当该任务真正刷新时才记录日志
-        // 避免每月刷新的任务也每天凌晨都记录一次log
-        if (task.getStartTime() != null && task.getCronConfig() != null) {
-            //这个周期的开始时间
-            LocalDateTime referencePoint = task.getStartTime().withHour(4).withMinute(0).withSecond(0).withNano(0);
-            if (task.getStartTime().isBefore(referencePoint)) {
-                referencePoint = referencePoint.minusDays(1);
-            }
-            if (!CronUtils.isExpired(task.getCronConfig(), referencePoint)) {
-                // 还没到刷新周期，不记录日志
-                return; 
-            }
-        }
-
-        doRecord(task);
-    }
-
-    // 事件触发：在用户手动确认完成时，立即记录/更新日志
-    @AfterReturning(pointcut = "execution(* ..TaskService.toggleComplete(..)) && args(taskId, complete)", returning = "result")
-    public void recordLogOnComplete(Long taskId, boolean complete, String result) {
-        if (complete) {
-            Task task = taskMapper.selectById(taskId);
-            if (task != null) doRecord(task);
+        List<Task> tasks = taskMapper.selectList(new LambdaQueryWrapper<Task>()
+                .eq(Task::getUserId, userId));
+        for (Task task : tasks) {
+            doRecord(task, logDate, boundary);
         }
     }
 
-    //生成log
-    private void doRecord(Task task) {
+    private void doRecord(Task task, LocalDate logDate, LocalDateTime boundary) {
         // 场景任务(SCENE)仅作为组织容器，没有时长和完成度指标，不记录日志
         if (task.getType() == TaskType.SCENE) return;
 
@@ -78,7 +61,10 @@ public class TaskLogAspect {
         TaskLog taskLog = new TaskLog();
         taskLog.setTaskId(task.getTaskId());
         taskLog.setUserId(task.getUserId());
-        taskLog.setDate(task.getStartTime() != null ? task.getStartTime().toLocalDate() : LocalDate.now());
+        LocalDate recordDate = logDate != null
+            ? logDate
+            : (task.getStartTime() != null ? task.getStartTime().toLocalDate() : LocalDate.now());
+        taskLog.setDate(recordDate);
         
         //任务信息的快照，以防后续用户更新任务，导致数据失真
         taskLog.setTitle(task.getTitle());
@@ -88,8 +74,9 @@ public class TaskLogAspect {
         
         //执行结果
         taskLog.setActualDuration(task.getActualDuration() != null ? task.getActualDuration() : 0);
+        taskLog.setDailyActualDuration(calculateDailyDuration(task.getCurrentDaySegments()));
         taskLog.setActualStartTime(task.getLastStartTime());
-        taskLog.setResultStatus(calculateResultStatus(task));
+        taskLog.setResultStatus(calculateResultStatus(task, boundary));
         taskLog.setWorkSegments(task.getCurrentDaySegments());
         
         //幂等检查：如果已经记录过了，则更新而不是新增
@@ -107,15 +94,16 @@ public class TaskLogAspect {
         }
     }
 
-    private LogResultStatus calculateResultStatus(Task task) {
+    private LogResultStatus calculateResultStatus(Task task, LocalDateTime boundary) {
         boolean isDone = Boolean.TRUE.equals(task.getIsCompleted());
         int actual = task.getActualDuration() == null ? 0 : task.getActualDuration();
         int target = task.getTargetDuration() == null ? 0 : task.getTargetDuration();
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = boundary != null ? boundary : LocalDateTime.now();
 
         // 未完成或未开始
         if (!isDone) {
-            return actual > 0 ? LogResultStatus.NOT_COMPLETED : LogResultStatus.NOT_STARTED;
+            if (actual > 0) return LogResultStatus.NOT_COMPLETED;
+            return isDueToComplete(task, now) ? LogResultStatus.NOT_STARTED : LogResultStatus.DEFERRED;
         }
 
         // 判断是否超时完成
@@ -136,5 +124,38 @@ public class TaskLogAspect {
         // 随手记：只有正常完成，没有超时概念
 
         return LogResultStatus.COMPLETED;
+    }
+
+    private boolean isDueToComplete(Task task, LocalDateTime boundary) {
+        if (task.getType() == TaskType.DEADLINE && task.getEndTime() != null) {
+            return task.getEndTime().isBefore(boundary);
+        }
+
+        if (task.getType() == TaskType.RECURRING && task.getStartTime() != null && task.getCronConfig() != null) {
+            LocalDateTime referencePoint = task.getStartTime().withHour(4).withMinute(0).withSecond(0).withNano(0);
+            if (task.getStartTime().isBefore(referencePoint)) {
+                referencePoint = referencePoint.minusDays(1);
+            }
+            return CronUtils.isExpired(task.getCronConfig(), referencePoint);
+        }
+
+        return false;
+    }
+
+    // 根据执行时段得到当日执行时长
+    private int calculateDailyDuration(String segmentsJson) {
+        if (segmentsJson == null || segmentsJson.isEmpty() || "[]".equals(segmentsJson)) {
+            return 0;
+        }
+
+        int total = 0;
+        Pattern p = Pattern.compile("\\[(\\d+),(\\d+)\\]");
+        Matcher m = p.matcher(segmentsJson);
+        while (m.find()) {
+            int start = Integer.parseInt(m.group(1));
+            int end = Integer.parseInt(m.group(2));
+            total += (end - start);
+        }
+        return total;
     }
 }
