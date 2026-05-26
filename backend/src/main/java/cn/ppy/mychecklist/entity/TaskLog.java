@@ -34,4 +34,5 @@ public class TaskLog {
     private Integer actualDuration;
     private LocalDateTime actualStartTime;
     private LogResultStatus resultStatus; // 0-未开始 1-未完成 2-完成 3-超时完成
+    private String workSegments; // 当日执行片段快照
 }

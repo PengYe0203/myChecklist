@@ -29,6 +29,7 @@ create table task (
   own_duration INT DEFAULT 0,
   sub_duration_sum INT DEFAULT 0,
   inherit_parent_time TINYINT(1) DEFAULT 1,
+  current_day_segments TEXT COMMENT '当天执行片段JSON: [[start_sec, end_sec], ...]',
   INDEX idx_user_id (user_id)
 );
 
@@ -44,6 +45,7 @@ create table task_log (
   actual_duration INT DEFAULT 0,
   actual_start_time DATETIME,
   result_status INT DEFAULT 0 COMMENT '0-未开始 1-未完成 2-完成 3-超时完成',
+  work_segments TEXT COMMENT '历史执行片段JSON: [[start_sec, end_sec], ...]',
   INDEX idx_user_id (user_id),
   INDEX idx_task_id (task_id)
 );
@@ -58,5 +60,6 @@ CREATE TABLE review (
     actual_duration_sum INT DEFAULT 0,
     planned_duration_sum INT DEFAULT 0,
     streak_days INT DEFAULT 0,
+    time_distribution JSON COMMENT '24小时利用分布:[sec0, sec1, ..., sec23]',
     UNIQUE KEY uk_user_date (user_id, date)
 );

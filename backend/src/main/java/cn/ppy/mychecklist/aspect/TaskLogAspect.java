@@ -23,7 +23,6 @@ import java.time.LocalDateTime;
 
 /**
  * 任务日志切面
- * 负责在任务刷新前记录其执行结果
  */
 @Aspect
 @Component

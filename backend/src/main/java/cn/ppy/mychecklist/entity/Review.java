@@ -25,5 +25,8 @@ public class Review {
     private Integer totalCount;            // 开启的总任务数
     private Integer actualDurationSum;     // 实际总时长（秒）
     private Integer plannedDurationSum;    // 计划总时长（秒）
+    private Integer grossEffort;           // 总投入时间（秒）
+    private Integer netFocusTime;          // 净专注时间（秒）
+    private String timeDistribution;       // 时间分布片段快照 JSON: [[start_sec, end_sec], ...]
     private Integer streakDays;            // 连续坚持天数
 }

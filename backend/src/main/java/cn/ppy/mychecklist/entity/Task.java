@@ -54,4 +54,6 @@ public class Task {
     private LocalDateTime lastStartTime; // 上次运行时间
 
     private boolean isActive; // 是否激活，主要用于周期任务的启停
+
+    private String currentDaySegments; // 当日时间分布片段序列 JSON: [[start,end],...]
 }
