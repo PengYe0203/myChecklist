@@ -242,13 +242,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         
         // 计算相对于当日凌晨4点的秒数
         LocalDateTime ref = endTime.withHour(4).withMinute(0).withSecond(0).withNano(0);
-        if (endTime.isBefore(ref)) ref = ref.minusDays(1);
+        // 如果结束时间在4点及之前，它属于上一个周期的闭合点
+        if (!endTime.isAfter(ref)) ref = ref.minusDays(1);
         
         long startSec = java.time.Duration.between(ref, startTime).getSeconds();
         long endSec = java.time.Duration.between(ref, endTime).getSeconds();
         
         // 跨天处理：如果开始时间在参考点之前（即属于前一天），截断到0
-        // 参考点之前的会由前一天的结算进行处理
         if (startSec < 0) startSec = 0;
         if (endSec < startSec) return;
         
@@ -530,8 +530,59 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         task.setSubDurationSum(0);
         task.setActualDuration(0);
         task.setLastStartTime(null);
+        task.setCurrentDaySegments("[]");
 
         this.updateById(task);
+    }
+
+    @Override
+    @Transactional
+    public void settleRunningTasks(Long userId) {
+        // 处理跨天时的计时问题
+        // boundary是调用时刻当天的凌晨4点
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime boundary = now.withHour(4).withMinute(0).withSecond(0).withNano(0);
+        if (now.isBefore(boundary)) boundary = boundary.minusDays(1);
+        
+        // 构建树上下文，因为涉及跨天结算时的父任务时长同步
+        TaskTreeContext context = new TaskTreeContext(userId);
+        
+        // 找出所有正在运行的任务
+        List<Task> runningTasks = context.idMap.values().stream()
+                .filter(t -> t.getRunStatus() == RunStatusType.IN_PROGRESS)
+                .collect(Collectors.toList());
+
+        boolean hasChanges = false;
+        for (Task task : runningTasks) {
+            if (task.getLastStartTime() != null && task.getLastStartTime().isBefore(boundary)) {
+                hasChanges = true;
+                // 计算昨日的时长
+                LocalDateTime lastStart = task.getLastStartTime();
+                long secondsYesterday = java.time.Duration.between(lastStart, boundary).getSeconds();
+                int seconds = (int) secondsYesterday;
+
+                // 记录昨日片段
+                recordSegment(task, lastStart, boundary);
+                
+                // 结算昨日时长到自身
+                int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
+                task.setOwnDuration(own + seconds);
+                updateActualDuration(task);
+                
+                // 重置今日起点（核心：不改状态，只改起点）
+                task.setLastStartTime(boundary);
+                context.markModified(task);
+                
+                // 级联同步：让父任务也能结算到子任务昨日贡献的时长
+                if (Boolean.TRUE.equals(task.getInheritParentTime())) {
+                    updateParentSubDuration(task.getParentId(), seconds, context);
+                }
+            }
+        }
+        
+        if (hasChanges) {
+            this.updateBatchById(context.getModifiedTasks());
+        }
     }
 
 

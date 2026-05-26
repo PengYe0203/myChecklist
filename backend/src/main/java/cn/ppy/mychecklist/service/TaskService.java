@@ -27,4 +27,6 @@ public interface TaskService extends IService<Task> {
     String resetTask(Long taskId);
 
     void refreshTask(Long taskId);
+
+    void settleRunningTasks(Long userId);
 }

@@ -90,6 +90,7 @@ public class TaskLogAspect {
         taskLog.setActualDuration(task.getActualDuration() != null ? task.getActualDuration() : 0);
         taskLog.setActualStartTime(task.getLastStartTime());
         taskLog.setResultStatus(calculateResultStatus(task));
+        taskLog.setWorkSegments(task.getCurrentDaySegments());
         
         //幂等检查：如果已经记录过了，则更新而不是新增
         TaskLog existing = taskLogMapper.selectOne(
