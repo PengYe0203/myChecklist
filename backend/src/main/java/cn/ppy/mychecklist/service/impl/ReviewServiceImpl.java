@@ -65,9 +65,11 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
             if (status != LogResultStatus.DEFERRED) {
                 requiredCount++;
                 // 计划总时和实际总时（仅统计需要完成的任务）
-                actualSum += (log.getDailyActualDuration() != null ? log.getDailyActualDuration() : 0);
+                int dailyActual = log.getDailyActualDuration() != null ? log.getDailyActualDuration() : 0;
                 // 在今天完成的长周期和ddl任务也会进到这里，因此需要特别处理
-                targetSum += calculateDailyTarget(log);
+                int dailyTarget = calculateDailyTarget(log);
+                actualSum += Math.min(dailyActual, dailyTarget);
+                targetSum += dailyTarget;
             }
 
             // 收集并处理时间分布片段
