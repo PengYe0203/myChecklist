@@ -216,8 +216,12 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (task.getRunStatus() != RunStatusType.IN_PROGRESS || task.getType() == TaskType.SCENE) return;
 
         // 计算流逝时间
-        long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
+        LocalDateTime lastStart = task.getLastStartTime();
+        long duration = java.time.Duration.between(lastStart, now).getSeconds();
         int seconds = (int) duration;
+
+        // 记录时间片段用于分布统计
+        recordSegment(task, lastStart, now);
 
         // 更新时长字段
         int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
@@ -231,6 +235,37 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (Boolean.TRUE.equals(task.getInheritParentTime())) {
             updateParentSubDuration(task.getParentId(), seconds, context);
         }
+    }
+
+    private void recordSegment(Task task, LocalDateTime startTime, LocalDateTime endTime) {
+        if (startTime == null || endTime == null) return;
+        
+        // 计算相对于当日凌晨4点的秒数
+        LocalDateTime ref = endTime.withHour(4).withMinute(0).withSecond(0).withNano(0);
+        if (endTime.isBefore(ref)) ref = ref.minusDays(1);
+        
+        long startSec = java.time.Duration.between(ref, startTime).getSeconds();
+        long endSec = java.time.Duration.between(ref, endTime).getSeconds();
+        
+        // 跨天处理：如果开始时间在参考点之前（即属于前一天），截断到0
+        // 参考点之前的会由前一天的结算进行处理
+        if (startSec < 0) startSec = 0;
+        if (endSec < startSec) return;
+        
+        String current = task.getCurrentDaySegments();
+        StringBuilder sb = new StringBuilder();
+        
+        if (current == null || current.trim().isEmpty() || "[]".equals(current)) {
+            sb.append("[[").append(startSec).append(",").append(endSec).append("]]");
+        } else {
+            sb.append(current); // [[s1,e1],[s2,e2]]
+            if (sb.length() > 0 && sb.charAt(sb.length() - 1) == ']') {
+                sb.setLength(sb.length() - 1); // [[s1,e1],[s2,e2]
+            }
+            // "[[s1,e1],[s2,e2]" + ",[s3, e3]]"
+            sb.append(",[").append(startSec).append(",").append(endSec).append("]]");
+        }
+        task.setCurrentDaySegments(sb.toString());
     }
 
     private void cascadePauseChildren(Long parentId, RunStatusType newStatus, LocalDateTime stopTime, TaskTreeContext context) {
