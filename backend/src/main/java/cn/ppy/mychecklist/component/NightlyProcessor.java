@@ -3,6 +3,7 @@ package cn.ppy.mychecklist.component;
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.entity.User;
 import cn.ppy.mychecklist.enums.TaskType;
+import cn.ppy.mychecklist.service.ReviewService;
 import cn.ppy.mychecklist.service.TaskService;
 import cn.ppy.mychecklist.service.UserService;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -28,12 +30,16 @@ public class NightlyProcessor {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private ReviewService reviewService;
+
     @Scheduled(cron = "0 0 4 * * *")
     public void executeNightlyBatch() {
         log.info("开始执行夜间批处理任务 - {}", LocalDateTime.now());
+        LocalDate yesterday = LocalDate.now().minusDays(1);
 
-        // 处理所有用户的跨天任务结算
-        settleAllRunningTasks();
+        // 处理所有用户的跨天任务结算并生成昨日报告
+        settleAndReportAllUsers(yesterday);
 
         // 刷新周期任务
         processRecurringTasks();
@@ -41,15 +47,18 @@ public class NightlyProcessor {
         log.info("夜间批处理任务执行完毕");
     }
 
-    private void settleAllRunningTasks() {
-        log.info("开始执行跨天任务结算...");
+    private void settleAndReportAllUsers(LocalDate yesterday) {
+        log.info("开始执行结算与报告生成...");
         List<User> users = userService.list();
         for (User user : users) {
              try {
-                 // 结算正在运行的任务（跨过4点的任务在此切断并记入昨日）
+                 // 结算正在运行的任务（跨过4点的任务在此切断）
                  taskService.settleRunningTasks(user.getUserId());
+                 
+                 // 生成昨日报告（关注客观数据）
+                 reviewService.generateDailyReport(yesterday, user.getUserId());
              } catch (Exception e) {
-                 log.error("用户 [{}] 任务结算失败", user.getUserId(), e);
+                 log.error("用户 [{}] 结算或报告生成失败", user.getUserId(), e);
              }
         }
     }
