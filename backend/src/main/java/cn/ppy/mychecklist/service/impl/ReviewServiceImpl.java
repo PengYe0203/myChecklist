@@ -66,7 +66,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
                 requiredCount++;
                 // 计划总时和实际总时（仅统计需要完成的任务）
                 actualSum += (log.getDailyActualDuration() != null ? log.getDailyActualDuration() : 0);
-                targetSum += (log.getPlannedDuration() != null ? log.getPlannedDuration() : 0);
+                // 在今天完成的长周期和ddl任务也会进到这里，因此需要特别处理
+                targetSum += calculateDailyTarget(log);
             }
 
             // 收集并处理时间分布片段
@@ -131,6 +132,15 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
 
         // 清空该用户所有任务的片段记录
         clearAllTaskSegments(userId);
+    }
+
+    private int calculateDailyTarget(TaskLog log) {
+        int planned = log.getPlannedDuration() == null ? 0 : log.getPlannedDuration();
+        int actual = log.getActualDuration() == null ? 0 : log.getActualDuration();
+        int dailyActual = log.getDailyActualDuration() == null ? 0 : log.getDailyActualDuration();
+
+        int remaining = planned - Math.max(actual - dailyActual, 0);
+        return Math.max(remaining, 0);
     }
 
     private void clearAllTaskSegments(Long userId) {
