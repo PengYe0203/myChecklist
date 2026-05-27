@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import cn.ppy.mychecklist.entity.Review;
+import cn.ppy.mychecklist.model.ReviewAggregateVo;
 import cn.ppy.mychecklist.service.ReviewService;
 import cn.ppy.mychecklist.util.Result;
 
@@ -55,5 +56,31 @@ public class ReviewController {
         }else{
             return Result.error(msg);
         }  
+    }
+
+    @GetMapping("/aggregate")
+    public Result<ReviewAggregateVo> getAggregateReview(
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
+
+        if(startDate.isAfter(endDate)) {
+            LocalDate temp = startDate;
+            startDate = endDate;
+            endDate = temp;
+        }
+
+        if(!endDate.isBefore(LocalDate.now())) {
+            return Result.error("今日及以后的数据还未统计完成，请选择截止到昨天的日期");
+        }
+
+        if(startDate.isBefore(LocalDate.now().minusDays(365))) {
+            return Result.error("只能查询最近一年的数据");
+        }
+
+        Long userId = getCurrentUserId();
+        ReviewAggregateVo aggregateData = 
+            reviewService.getAggregateReview(startDate, endDate, userId);
+        
+        return Result.success(aggregateData);
     }
 }

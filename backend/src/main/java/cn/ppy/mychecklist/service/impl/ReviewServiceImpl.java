@@ -7,6 +7,7 @@ import cn.ppy.mychecklist.enums.LogResultStatus;
 import cn.ppy.mychecklist.mapper.ReviewMapper;
 import cn.ppy.mychecklist.mapper.TaskLogMapper;
 import cn.ppy.mychecklist.mapper.TaskMapper;
+import cn.ppy.mychecklist.model.ReviewAggregateVo;
 import cn.ppy.mychecklist.service.ReviewService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -211,5 +212,53 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         review.setUserId(userId);
         review.setDate(date);
         return review;
+    }
+
+    @Override
+    public ReviewAggregateVo getAggregateReview(LocalDate startDate, LocalDate endDate, Long currentUserId) {
+        List<Review> reviews = this.lambdaQuery()
+                .eq(Review::getUserId, currentUserId)
+                .between(Review::getDate, startDate, endDate)
+                .list();
+
+        ReviewAggregateVo aggregate = new ReviewAggregateVo();
+        aggregate.setReviewCount(reviews.size());
+        if(reviews.isEmpty()) return aggregate;
+        
+        int doneCount = 0;             // 已完成任务数
+        int totalCount = 0;            // 开启的总任务数
+        int actualDurationSum = 0;     // 实际总时长（秒）
+        int plannedDurationSum = 0;    // 计划总时长（秒）
+        int grossEffort = 0;           // 总投入时间（秒）
+        int netFocusTime = 0;          // 净专注时间（秒）
+        List<LocalDate> activeDistribution = new ArrayList<>();     // 有任务的天数分布
+        List<LocalDate> streakDistribution = new ArrayList<>();     // 完成所有任务的天数
+
+        for(Review review: reviews){
+            activeDistribution.add(review.getDate());
+
+            int curDone = review.getDoneCount() != null ? review.getDoneCount() : 0;
+            int curTotal = review.getTotalCount() != null ? review.getTotalCount() : 0;
+
+            if(curTotal > 0 && curDone == curTotal) streakDistribution.add(review.getDate());
+            doneCount += curDone;
+            totalCount += curTotal;
+            actualDurationSum += review.getActualDurationSum() != null ? review.getActualDurationSum() : 0;
+            plannedDurationSum += review.getPlannedDurationSum() != null ? review.getPlannedDurationSum() : 0;
+            grossEffort += review.getGrossEffort() != null ? review.getGrossEffort() : 0;
+            netFocusTime += review.getNetFocusTime() != null ? review.getNetFocusTime() : 0;
+
+        }
+
+        aggregate.setDoneCount(doneCount);
+        aggregate.setTotalCount(totalCount);
+        aggregate.setActualDurationSum(actualDurationSum);
+        aggregate.setPlannedDurationSum(plannedDurationSum);
+        aggregate.setGrossEffort(grossEffort);
+        aggregate.setNetFocusTime(netFocusTime);
+        aggregate.setActiveDistribution(activeDistribution);
+        aggregate.setStreakDistribution(streakDistribution);
+
+        return aggregate;
     }
 }
