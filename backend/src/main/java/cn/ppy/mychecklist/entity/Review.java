@@ -14,7 +14,6 @@ public class Review {
     private Long reviewId;
 
     private Long userId;
-    
     private LocalDate date;
 
     // 用户写的主观反馈

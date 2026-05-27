@@ -19,9 +19,7 @@ public class TaskLog {
     private Long logId;
 
     private Long taskId;
-
     private Long userId;
-
     private LocalDate date;
 
     //task的快照，预防用户直接在已有任务上修改了任务属性导致日志数据不一致
