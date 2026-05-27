@@ -23,6 +23,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) //彻底禁用Session，变为无状态
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/**").permitAll() // 登录和注册接口直接放行
+                .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll() // 允许访问Swagger UI和API文档
                 .anyRequest().authenticated() // 其他接口需要认证
             );
 

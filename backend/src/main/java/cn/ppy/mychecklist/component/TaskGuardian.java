@@ -20,7 +20,7 @@ public class TaskGuardian {
     @Value("${checklist.heartbeat.timeout-threshold:300}")
     private int timeoutThreshold;
 
-    @Value("${checklist.heartbeat.interval:60s}")
+    @Value("${checklist.heartbeat.interval-ms:60000}")
     private Duration heartbeatInterval;
 
     @Autowired
@@ -31,7 +31,7 @@ public class TaskGuardian {
 
     //每隔一个心跳间隔执行一次，检查所有运行中的任务上次心跳是什么时候
     //如果超过设定的阈值，就认为任务已死，触发暂停逻辑
-    @Scheduled(fixedRateString = "${checklist.heartbeat.interval:60s}")
+    @Scheduled(fixedRateString = "${checklist.heartbeat.interval-ms:60000}")
     public void scavengeZombieTasks() {
         LocalDateTime now = LocalDateTime.now();
         // 找出所有正在运行的任务
