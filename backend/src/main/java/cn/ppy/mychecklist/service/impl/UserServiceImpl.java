@@ -29,6 +29,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
         if(this.query().eq("username", username).count() > 0) { // 用户名查重
             return "注册失败：用户名已存在";
+        }else if(username == null) { // 用户名长度检查
+            return "注册失败：用户名不能为空";
+        }
+        if(password == null || password.length() < 6) { // 密码长度检查
+            return "注册失败：密码长度必须至少6位";
         }
         user.setPassword(passwordEncoder.encode(password)); // 密码加密
         user.setCreateTime(LocalDateTime.now());
