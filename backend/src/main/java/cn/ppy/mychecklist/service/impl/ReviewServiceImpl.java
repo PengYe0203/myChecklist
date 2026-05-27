@@ -116,9 +116,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
                 .one();
         
         if (review == null) {
-            review = new Review();
-            review.setUserId(userId);
-            review.setDate(date);
+            review = initReview(date, userId);
         }
 
         review.setDoneCount(doneCount);
@@ -177,5 +175,41 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         }
         merged.add(current);
         return merged;
+    }
+
+    @Override
+    public Review getByDate(LocalDate date, Long currentUserId) {
+        Review review = this.lambdaQuery()
+                .eq(Review::getUserId, currentUserId)
+                .eq(Review::getDate, date)
+                .one();
+        return review;
+    }
+
+    @Override
+    public List<Review> getAll(Long currentUserId) {
+        List<Review> reviews = this.lambdaQuery()
+                .eq(Review::getUserId, currentUserId)
+                .orderByDesc(Review::getDate)
+                .list();
+        return reviews;
+    }
+
+    @Override
+    public String editReview(LocalDate date, String content, Long currentUserId) {
+        Review review = this.getByDate(date, currentUserId);
+        if (review == null) {
+            // 创建一个仅有日期和用户id的空记录
+            review = initReview(date, currentUserId);
+        }
+        review.setContent(content);
+        return this.updateById(review)? "更新成功": "更新失败";
+    }
+
+    private Review initReview(LocalDate date, Long userId) {
+        Review review = new Review();
+        review.setUserId(userId);
+        review.setDate(date);
+        return review;
     }
 }
