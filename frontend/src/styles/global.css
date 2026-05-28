@@ -1,0 +1,35 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  min-height: 100%;
+  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #1f2329;
+  background: #f5f6f8;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.el-button--warning {
+  --el-button-bg-color: #f7d54a;
+  --el-button-border-color: #f7d54a;
+  --el-button-hover-bg-color: #f0cb34;
+  --el-button-hover-border-color: #f0cb34;
+  --el-button-active-bg-color: #e8bf22;
+  --el-button-active-border-color: #e8bf22;
+  --el-button-text-color: #4b3a00;
+}
+
+.el-tag--warning {
+  --el-tag-bg-color: rgba(247, 213, 74, 0.2);
+  --el-tag-border-color: rgba(247, 213, 74, 0.35);
+  --el-tag-text-color: #8f6b00;
+}
