@@ -11,4 +11,7 @@ public interface UserService extends IService<User>{
 
     // 用户登录，成功则返回JWT token
     String login(String username, String password);
+
+    // 通过邮箱找回密码
+    String resetPasswordByEmail(String email, String newPassword);
 }

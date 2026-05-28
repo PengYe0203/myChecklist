@@ -35,9 +35,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if(password == null || password.length() < 6) { // 密码长度检查
             return "注册失败：密码长度必须至少6位";
         }
+        if(email != null && !email.isBlank() && this.query().eq("email", email).count() > 0) {
+            return "注册失败：邮箱已被注册";
+        }
         user.setPassword(passwordEncoder.encode(password)); // 密码加密
         user.setCreateTime(LocalDateTime.now());
-        if(email != null && !email.isEmpty()) user.setEmail(email);
+        if(email != null && !email.isBlank()) user.setEmail(email);
         
         return this.save(user) ? "注册成功" : "注册失败";
     }
@@ -54,6 +57,29 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }else{
             return "登录失败：密码错误";
         }
+    }
+
+    @Override
+    public String resetPasswordByEmail(String email, String newPassword) {
+        if(email == null || email.isBlank()) {
+            return "失败：邮箱不能为空";
+        }
+        if(newPassword == null || newPassword.length() < 6) {
+            return "失败：新密码长度必须至少6位";
+        }
+
+        User user = this.query()
+                .select("user_id", "email")
+                .eq("email", email)
+                .one();
+        if(user == null) {
+            return "失败：邮箱不存在";
+        }
+
+        User updateUser = new User();
+        updateUser.setUserId(user.getUserId());
+        updateUser.setPassword(passwordEncoder.encode(newPassword));
+        return this.updateById(updateUser) ? "找回密码成功" : "找回密码失败";
     }
 
 }

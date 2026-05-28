@@ -9,8 +9,8 @@
         </div>
 
         <div class="card-head">
-          <span class="eyebrow">WELCOME BACK</span>
-          <h1>登录你的清单</h1>
+          <span class="eyebrow">CREATE ACCOUNT</span>
+          <h1>注册新账号</h1>
         </div>
 
         <el-form
@@ -22,44 +22,27 @@
           @submit.prevent
         >
           <el-form-item label="用户名" prop="username">
-            <el-input
-              v-model="form.username"
-              placeholder="请输入用户名"
-              size="large"
-              clearable
-              autocomplete="username"
-            />
+            <el-input v-model="form.username" placeholder="请输入用户名" size="large" clearable autocomplete="username" />
+          </el-form-item>
+
+          <el-form-item label="邮箱 (可选)" prop="email">
+            <el-input v-model="form.email" placeholder="请输入邮箱" size="large" clearable autocomplete="email" />
           </el-form-item>
 
           <el-form-item label="密码" prop="password">
-            <el-input
-              v-model="form.password"
-              type="password"
-              placeholder="请输入密码"
-              size="large"
-              clearable
-              show-password
-              autocomplete="current-password"
-            />
+            <el-input v-model="form.password" type="password" placeholder="请输入密码" size="large" clearable show-password autocomplete="new-password" />
           </el-form-item>
 
-          <div class="actions-row">
-            <el-checkbox v-model="rememberMe">记住我</el-checkbox>
-            <el-button link type="warning">忘记密码</el-button>
-          </div>
+          <el-form-item label="确认密码" prop="confirm">
+            <el-input v-model="form.confirm" type="password" placeholder="请再次输入密码" size="large" clearable show-password autocomplete="new-password" />
+          </el-form-item>
 
-          <el-button
-            type="warning"
-            size="large"
-            class="submit-btn"
-            :loading="loading"
-            @click="handleLogin"
-          >
-            登录
+          <el-button type="warning" size="large" class="submit-btn" :loading="loading" @click="handleRegister">
+            注册
           </el-button>
 
           <div class="helper-text">
-            还没有账号？ <router-link to="/register">去注册</router-link>
+            已有账号？ <router-link to="/login">去登录</router-link>
           </div>
         </el-form>
       </section>
@@ -70,46 +53,62 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import type { FormInstance, FormRules } from 'element-plus';
+import type { FormInstance, FormItemRule, FormRules } from 'element-plus';
 import { ElMessage } from 'element-plus';
-import { loginApi } from '@/api/auth';
-import { useAuthStore } from '@/stores/auth';
+import { registerApi } from '@/api/auth';
 
 const router = useRouter();
-const authStore = useAuthStore();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
-const rememberMe = ref(true);
 
 const form = reactive({
   username: '',
+  email: '',
   password: '',
+  confirm: '',
 });
+
+const validateEmail: FormItemRule['validator'] = (_, value, callback) => {
+  if (!value) {
+    callback();
+    return;
+  }
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailPattern.test(String(value))) {
+    callback(new Error('邮箱格式不正确'));
+    return;
+  }
+  callback();
+};
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  email: [{ validator: validateEmail, trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  confirm: [{ required: true, message: '请确认密码', trigger: 'blur' }],
 };
 
-const handleLogin = async () => {
+const handleRegister = async () => {
   if (!formRef.value) return;
   await formRef.value.validate(async (valid) => {
     if (!valid) return;
+    if (form.password !== form.confirm) {
+      ElMessage.error('两次输入的密码不一致');
+      return;
+    }
 
     loading.value = true;
     try {
-      const response = await loginApi({
+      const payload = {
         username: form.username.trim(),
         password: form.password,
-      });
-
-      const token = response.data || '';
-      authStore.login(token, form.username.trim());
-      if (!rememberMe.value) {
-        sessionStorage.setItem('mychecklist_username', form.username.trim());
-      }
-      ElMessage.success('登录成功');
-      await router.push('/home');
+        email: form.email?.trim() || undefined,
+      };
+      const res = await registerApi(payload);
+      ElMessage.success(res.data || '注册成功');
+      await router.push('/login');
+    } catch (err) {
+      // http 库会显示消息
     } finally {
       loading.value = false;
     }
