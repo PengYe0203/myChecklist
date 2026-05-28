@@ -80,6 +80,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
 
         <!-- Spring Cloud 微服务组件 (适配 Spring MVC 环境的 Gateway) -->
         <!-- 暂时注释掉，之后再考虑加上

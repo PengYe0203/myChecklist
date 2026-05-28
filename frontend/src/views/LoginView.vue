@@ -45,7 +45,7 @@
 
           <div class="actions-row">
             <el-checkbox v-model="rememberMe">记住我</el-checkbox>
-            <el-button link type="warning">忘记密码</el-button>
+            <el-button link type="warning" @click="goResetPassword">忘记密码</el-button>
           </div>
 
           <el-button
@@ -89,6 +89,10 @@ const form = reactive({
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+};
+
+const goResetPassword = () => {
+  router.push('/reset-password');
 };
 
 const handleLogin = async () => {

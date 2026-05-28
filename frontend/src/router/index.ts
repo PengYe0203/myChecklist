@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import LoginView from '@/views/LoginView.vue';
 import RegisterView from '@/views/RegisterView.vue';
+import ResetPasswordView from '@/views/ResetPasswordView.vue';
 import HomeView from '@/views/HomeView.vue';
 import { getToken } from '@/utils/auth';
 
@@ -22,6 +23,12 @@ const router = createRouter({
       path: '/register',
       name: 'register',
       component: RegisterView,
+      meta: { public: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: ResetPasswordView,
       meta: { public: true },
     },
     {
