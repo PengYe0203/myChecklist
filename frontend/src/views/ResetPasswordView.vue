@@ -31,7 +31,9 @@
               autocomplete="email"
             >
               <template #append>
-                <el-button :loading="sendingCode" @click="handleSendCode">发送验证码</el-button>
+                <el-button :loading="sendingCode" :disabled="resendCountdown > 0" @click="handleSendCode">
+                  {{ resendCountdown > 0 ? `${resendCountdown}s 后重发` : '发送验证码' }}
+                </el-button>
               </template>
             </el-input>
           </el-form-item>
@@ -91,7 +93,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { onBeforeUnmount, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import type { FormInstance, FormItemRule, FormRules } from 'element-plus';
 import { ElMessage } from 'element-plus';
@@ -101,6 +103,8 @@ const router = useRouter();
 const formRef = ref<FormInstance>();
 const loading = ref(false);
 const sendingCode = ref(false);
+const resendCountdown = ref(0);
+let countdownTimer: number | null = null;
 
 const form = reactive({
   email: '',
@@ -141,9 +145,39 @@ const rules: FormRules = {
   confirmPassword: [{ validator: validateConfirm, trigger: 'blur' }],
 };
 
+const startCountdown = (seconds = 60) => {
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+
+  resendCountdown.value = seconds;
+  countdownTimer = window.setInterval(() => {
+    if (resendCountdown.value <= 1) {
+      if (countdownTimer) {
+        window.clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+      resendCountdown.value = 0;
+      return;
+    }
+    resendCountdown.value -= 1;
+  }, 1000);
+};
+
+onBeforeUnmount(() => {
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+});
+
 const handleSendCode = async () => {
   if (!form.email) {
     ElMessage.warning('请先输入邮箱');
+    return;
+  }
+  if (resendCountdown.value > 0) {
     return;
   }
 
@@ -151,6 +185,7 @@ const handleSendCode = async () => {
   try {
     const response = await sendVerificationCodeApi({ email: form.email.trim() });
     ElMessage.success(response.data || '验证码已发送，请查收邮箱');
+    startCountdown(60);
   } catch (error) {
     // http 层会处理错误提示
   } finally {

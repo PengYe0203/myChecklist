@@ -42,7 +42,8 @@
           </el-button>
 
           <div class="helper-text">
-            已有账号？ <router-link to="/login">去登录</router-link>
+            已有账号？
+            <el-button link type="warning" class="helper-link-btn" @click="goLogin">去登录</el-button>
           </div>
         </el-form>
       </section>
@@ -86,6 +87,10 @@ const rules: FormRules = {
   email: [{ validator: validateEmail, trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
   confirm: [{ required: true, message: '请确认密码', trigger: 'blur' }],
+};
+
+const goLogin = () => {
+  router.push('/login');
 };
 
 const handleRegister = async () => {
@@ -216,6 +221,12 @@ const handleRegister = async () => {
   color: #8a92a2;
   font-size: 13px;
   line-height: 1.7;
+}
+
+.helper-link-btn {
+  padding: 0;
+  font-size: 13px;
+  vertical-align: baseline;
 }
 
 @media (max-width: 640px) {

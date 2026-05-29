@@ -59,7 +59,8 @@
           </el-button>
 
           <div class="helper-text">
-            还没有账号？ <router-link to="/register">去注册</router-link>
+            还没有账号？
+            <el-button link type="warning" class="helper-link-btn" @click="goRegister">去注册</el-button>
           </div>
         </el-form>
       </section>
@@ -93,6 +94,10 @@ const rules: FormRules = {
 
 const goResetPassword = () => {
   router.push('/reset-password');
+};
+
+const goRegister = () => {
+  router.push('/register');
 };
 
 const handleLogin = async () => {
@@ -221,6 +226,12 @@ const handleLogin = async () => {
   color: #8a92a2;
   font-size: 13px;
   line-height: 1.7;
+}
+
+.helper-link-btn {
+  padding: 0;
+  font-size: 13px;
+  vertical-align: baseline;
 }
 
 @media (max-width: 640px) {
