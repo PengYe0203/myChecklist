@@ -24,7 +24,7 @@ http.interceptors.request.use((config) => {
 });
 
 http.interceptors.response.use(
-  (response: AxiosResponse<ApiResult<unknown>>) => {
+  ((response: AxiosResponse<ApiResult<unknown>>) => {
     const { data } = response;
     if (data?.code === 200) {
       return data;
@@ -36,18 +36,25 @@ http.interceptors.response.use(
     }
     ElMessage.error(data?.message || '请求失败');
     return Promise.reject(new Error(data?.message || '请求失败'));
-  },
-  (error: AxiosError<ApiResult<unknown>>) => {
+  }) as any,
+  ((error: AxiosError<ApiResult<unknown>>) => {
     const status = error.response?.status;
     if (status === 401) {
       clearToken();
       router.push('/login');
+      ElMessage.error('登录已过期，请重新登录');
+      return Promise.reject(error);
+    }
+    if (status === 403) {
+      clearToken();
+      router.push('/login');
+      ElMessage.error('没有权限或登录已过期，请重新登录');
       return Promise.reject(error);
     }
     const message = error.response?.data?.message || error.message || '网络异常';
     ElMessage.error(message);
     return Promise.reject(error);
-  },
+  }) as any,
 );
 
 export default http;

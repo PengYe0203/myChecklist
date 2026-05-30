@@ -5,47 +5,1203 @@
         <div class="brand-mark">☀</div>
         <div>
           <div class="brand-title">MyChecklist</div>
-          <div class="brand-subtitle">今日清单</div>
+        </div>
+      </div>
+
+      <div class="user-card">
+        <div class="user-card-icon">👤</div>
+        <div class="user-card-content">
+          <div class="user-card-name">{{ displayUsername }}</div>
         </div>
       </div>
 
       <nav class="nav-list">
-        <button class="nav-item active">我的一天</button>
-        <button class="nav-item">重要</button>
-        <button class="nav-item">计划内</button>
-        <button class="nav-item">已分配给我</button>
-        <button class="nav-item">任务树</button>
+        <button
+          v-for="item in sectionItems"
+          :key="item.key"
+          class="nav-item"
+          :class="{ active: activeSection === item.key }"
+            @click="setActiveSection(item.key)"
+        >
+          <span>{{ item.label }}</span>
+          <small>{{ item.countLabel }}</small>
+        </button>
       </nav>
+
+      <div class="sidebar-bottom">
+        <el-button class="logout-btn" type="warning" plain @click="handleLogout">退出登录</el-button>
+      </div>
     </aside>
 
     <main class="content-area">
       <header class="content-topbar">
         <div>
-          <h1>我的一天</h1>
+          <h1>{{ activeSectionTitle }}</h1>
           <p>{{ todayLabel }}</p>
         </div>
-        <el-button type="warning" plain @click="handleLogout">退出登录</el-button>
       </header>
+      <div v-if="activeSection === 'today'" class="section-toolbar section-toolbar-left">
+        <el-button type="warning" @click="openCreateTaskDialog()">新建任务</el-button>
+        <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
+      </div>
+      <section v-if="activeSection === 'today'" class="panel-card">
+        <el-empty v-if="!currentTodayTree.length && !loadingTasks" description="当前没有今日任务" />
 
-      <section class="task-card">
-        <div class="task-input-row">
-          <el-input v-model="draftTask" placeholder="添加任务" size="large" />
-          <el-button type="warning">添加</el-button>
-        </div>
-        <div class="task-empty">这里先作为主页面布局骨架，后续接任务树和日志详情。</div>
+        <el-tree
+          v-else
+          class="task-tree"
+          :data="currentTodayTree"
+          node-key="taskId"
+          :props="treeProps"
+          default-expand-all
+          :expand-on-click-node="false"
+        >
+          <template #default="{ data }">
+            <div class="task-node">
+              <div class="task-node-main">
+                <div class="task-node-title-row">
+                  <span class="task-node-title">{{ data.title }}</span>
+                  <el-tag size="small" :type="taskTypeTagType(data.type)">
+                    {{ taskTypeLabel(data.type) }}
+                  </el-tag>
+                  <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
+                    {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
+                  </el-tag>
+                  <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
+                    + 子任务
+                  </el-button>
+                </div>
+
+                <div class="task-node-meta">
+                  <span v-if="data.description">{{ data.description }}</span>
+                  <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
+                  <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
+                  <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                </div>
+              </div>
+
+              <div class="task-node-actions">
+                <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                <el-button
+                  link
+                  type="success"
+                  @click.stop="toggleComplete(data)"
+                >
+                  {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                </el-button>
+                <el-button link type="warning" @click.stop="toggleActive(data)">
+                  {{ data.active ? '停用' : '启用' }}
+                </el-button>
+                <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+              </div>
+            </div>
+          </template>
+        </el-tree>
       </section>
+
+      <div v-if="activeSection === 'todo'" class="section-toolbar section-toolbar-left">
+        <el-button type="warning" @click="openCreateTaskDialog()">新建任务</el-button>
+        <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
+      </div>
+      <section v-if="activeSection === 'todo'" class="task-split-layout">
+        <div class="panel-card task-split-card">
+          <div class="panel-head panel-head-stacked panel-head-actions-left">
+            <div class="panel-head-title">今日待办</div>
+          </div>
+
+          <el-empty v-if="!currentTodoTodayTree.length && !loadingTasks" description="当前没有今日待办" />
+
+          <el-tree
+            v-else
+            class="task-tree"
+            :data="currentTodoTodayTree"
+            node-key="taskId"
+            :props="treeProps"
+            default-expand-all
+            :expand-on-click-node="false"
+          >
+            <template #default="{ data }">
+              <div class="task-node">
+                <div class="task-node-main">
+                  <div class="task-node-title-row">
+                    <span class="task-node-title">{{ data.title }}</span>
+                    <el-tag size="small" :type="taskTypeTagType(data.type)">
+                      {{ taskTypeLabel(data.type) }}
+                    </el-tag>
+                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
+                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
+                    </el-tag>
+                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
+                      + 子任务
+                    </el-button>
+                  </div>
+
+                  <div class="task-node-meta">
+                    <span v-if="data.description">{{ data.description }}</span>
+                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
+                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
+                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  </div>
+                </div>
+
+                <div class="task-node-actions">
+                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button link type="success" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  </el-button>
+                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                    {{ data.active ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+
+        <div class="panel-card task-split-card">
+          <div class="panel-head panel-head-stacked panel-head-actions-left">
+            <div class="panel-head-title">后续待办</div>
+          </div>
+
+          <el-empty v-if="!currentTodoFutureTree.length && !loadingTasks" description="当前没有后续待办" />
+
+          <el-tree
+            v-else
+            class="task-tree"
+            :data="currentTodoFutureTree"
+            node-key="taskId"
+            :props="treeProps"
+            default-expand-all
+            :expand-on-click-node="false"
+          >
+            <template #default="{ data }">
+              <div class="task-node">
+                <div class="task-node-main">
+                  <div class="task-node-title-row">
+                    <span class="task-node-title">{{ data.title }}</span>
+                    <el-tag size="small" :type="taskTypeTagType(data.type)">
+                      {{ taskTypeLabel(data.type) }}
+                    </el-tag>
+                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
+                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
+                    </el-tag>
+                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
+                      + 子任务
+                    </el-button>
+                  </div>
+
+                  <div class="task-node-meta">
+                    <span v-if="data.description">{{ data.description }}</span>
+                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
+                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
+                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  </div>
+                </div>
+
+                <div class="task-node-actions">
+                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button link type="success" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  </el-button>
+                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                    {{ data.active ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+      </section>
+
+      <section v-else-if="activeSection === 'all'" class="task-split-layout">
+        <div class="panel-card task-split-card">
+          <div class="panel-head panel-head-stacked panel-head-actions-left">
+            <div class="panel-head-title">场景管理</div>
+            <div class="panel-head-actions">
+              <el-button type="warning" @click="openCreateSceneDialog()">新建场景</el-button>
+              <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
+            </div>
+          </div>
+
+          <el-empty v-if="!sceneTaskTree.length && !loadingTasks" description="当前没有场景" />
+
+          <el-tree
+            v-else
+            class="task-tree"
+            :data="sceneTaskTree"
+            node-key="taskId"
+            :props="treeProps"
+            default-expand-all
+            :expand-on-click-node="false"
+          >
+            <template #default="{ data }">
+              <div class="task-node">
+                <div class="task-node-main">
+                  <div class="task-node-title-row">
+                    <span class="task-node-title">{{ data.title }}</span>
+                    <el-tag size="small" :type="taskTypeTagType(data.type)">
+                      {{ taskTypeLabel(data.type) }}
+                    </el-tag>
+                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
+                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
+                    </el-tag>
+                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data, false)">
+                      + 子任务
+                    </el-button>
+                  </div>
+
+                  <div class="task-node-meta">
+                    <span v-if="data.description">{{ data.description }}</span>
+                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
+                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
+                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  </div>
+                </div>
+
+                <div class="task-node-actions">
+                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button link type="success" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  </el-button>
+                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                    {{ data.active ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+
+        <div class="panel-card task-split-card">
+          <div class="panel-head panel-head-stacked panel-head-actions-left">
+            <div class="panel-head-title">非场景任务</div>
+            <div class="panel-head-actions">
+              <el-button type="warning" @click="openCreateTaskDialog(null, false)">新建任务</el-button>
+              <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
+            </div>
+          </div>
+
+          <el-empty v-if="!nonSceneTaskTree.length && !loadingTasks" description="当前没有非场景任务" />
+
+          <el-tree
+            v-else
+            class="task-tree"
+            :data="nonSceneTaskTree"
+            node-key="taskId"
+            :props="treeProps"
+            default-expand-all
+            :expand-on-click-node="false"
+          >
+            <template #default="{ data }">
+              <div class="task-node">
+                <div class="task-node-main">
+                  <div class="task-node-title-row">
+                    <span class="task-node-title">{{ data.title }}</span>
+                    <el-tag size="small" :type="taskTypeTagType(data.type)">
+                      {{ taskTypeLabel(data.type) }}
+                    </el-tag>
+                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
+                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
+                    </el-tag>
+                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
+                      + 子任务
+                    </el-button>
+                  </div>
+
+                  <div class="task-node-meta">
+                    <span v-if="data.description">{{ data.description }}</span>
+                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
+                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
+                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  </div>
+                </div>
+
+                <div class="task-node-actions">
+                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button link type="success" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  </el-button>
+                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                    {{ data.active ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
+              </div>
+            </template>
+          </el-tree>
+        </div>
+      </section>
+
+      <section v-if="activeSection === 'review'" class="review-layout">
+        <div class="panel-card review-editor-card">
+          <div class="panel-head">
+            <div>
+              <h3>今日总结</h3>
+              <p>先写草稿，自动保存在本地；确定后再同步到后端。</p>
+            </div>
+            <div class="panel-head-actions">
+              <el-button plain @click="saveDraft">保存草稿</el-button>
+              <el-button type="warning" :loading="savingReview" @click="saveReviewToServer">保存到后端</el-button>
+            </div>
+          </div>
+
+          <el-input
+            v-model="reviewDraft"
+            type="textarea"
+            :rows="11"
+            maxlength="2000"
+            show-word-limit
+            placeholder="写下今天的 review content..."
+          />
+
+          <div class="review-tips">
+            当前草稿会自动保存到本地浏览器，后续你接入 Redis 后可以无缝迁移为服务端草稿。
+          </div>
+        </div>
+
+        <div class="review-grid">
+          <div class="panel-card review-history-card">
+            <div class="panel-head">
+              <div>
+                <h3>历史 review</h3>
+                <p>点击任意条目查看详情。</p>
+              </div>
+              <el-button link type="warning" @click="loadReviews">刷新</el-button>
+            </div>
+
+            <el-empty v-if="!reviewHistory.length" description="还没有历史回顾" />
+
+            <div v-else class="review-list">
+              <button
+                v-for="item in reviewHistory"
+                :key="item.reviewId"
+                class="review-item"
+                :class="{ active: selectedReview?.reviewId === item.reviewId }"
+                @click="selectReview(item)"
+              >
+                <div class="review-item-top">
+                  <strong>{{ formatDateOnly(item.date) }}</strong>
+                  <span>{{ item.doneCount ?? 0 }} / {{ item.totalCount ?? 0 }}</span>
+                </div>
+                <div class="review-item-snippet">
+                  {{ reviewSnippet(item.content) }}
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <div class="panel-card review-detail-card">
+            <div class="panel-head">
+              <div>
+                <h3>回顾详情</h3>
+                <p v-if="selectedReview">{{ formatDateOnly(selectedReview.date) }}</p>
+                <p v-else>点击左侧任意历史 review 查看详情。</p>
+              </div>
+            </div>
+
+            <template v-if="selectedReview">
+              <div class="detail-grid">
+                <div class="detail-item">
+                  <span>完成</span>
+                  <strong>{{ selectedReview.doneCount ?? 0 }}</strong>
+                </div>
+                <div class="detail-item">
+                  <span>总任务</span>
+                  <strong>{{ selectedReview.totalCount ?? 0 }}</strong>
+                </div>
+                <div class="detail-item">
+                  <span>净专注</span>
+                  <strong>{{ formatDuration(selectedReview.netFocusTime) }}</strong>
+                </div>
+                <div class="detail-item">
+                  <span>实际投入</span>
+                  <strong>{{ formatDuration(selectedReview.actualDurationSum) }}</strong>
+                </div>
+              </div>
+
+              <div class="detail-block">
+                <div class="detail-block-label">review content</div>
+                <pre class="detail-pre">{{ selectedReview.content || '暂无内容' }}</pre>
+              </div>
+
+              <div class="detail-block" v-if="selectedReview.timeDistribution">
+                <div class="detail-block-label">time distribution</div>
+                <pre class="detail-pre">{{ prettyJson(selectedReview.timeDistribution) }}</pre>
+              </div>
+
+              <div class="detail-footer">
+                <el-tag type="warning">连续 {{ selectedReview.streakDays ?? 0 }} 天</el-tag>
+                <el-tag type="info">毛时长 {{ formatDuration(selectedReview.grossEffort) }}</el-tag>
+              </div>
+            </template>
+
+            <el-empty v-else description="请选择一条历史 review" />
+          </div>
+        </div>
+      </section>
+
+      <el-dialog
+        v-model="taskDialogVisible"
+        :title="taskDialogTitle"
+        width="620px"
+        class="task-dialog"
+        destroy-on-close
+        append-to-body
+        @closed="resetTaskDialog"
+      >
+        <el-steps v-if="!isSceneDialog" :active="taskDialogStep" finish-status="success" align-center class="task-dialog-steps">
+          <el-step title="基本信息" />
+          <el-step title="时间信息" />
+        </el-steps>
+
+        <div v-if="taskDialogParent" class="task-dialog-parent-chip">
+          <span>父任务</span>
+          <strong>{{ taskDialogParent.title }}</strong>
+          <el-tag size="small" :type="taskTypeTagType(taskDialogParent.type)">
+            {{ taskTypeLabel(taskDialogParent.type) }}
+          </el-tag>
+        </div>
+
+        <el-alert
+          v-for="warning in taskDialogWarnings"
+          :key="warning"
+          :title="warning"
+          type="warning"
+          show-icon
+          :closable="false"
+          class="task-dialog-alert"
+        />
+
+        <el-form
+          ref="taskFormRef"
+          :model="taskForm"
+          :rules="taskFormRules"
+          label-position="top"
+          class="task-dialog-form"
+          @submit.prevent
+        >
+          <div v-if="isSceneDialog" class="task-dialog-page">
+            <el-form-item label="场景标题" prop="title">
+              <el-input v-model="taskForm.title" placeholder="请输入场景标题" maxlength="120" show-word-limit />
+            </el-form-item>
+
+            <el-form-item label="场景描述（可选）" prop="description">
+              <el-input
+                v-model="taskForm.description"
+                type="textarea"
+                :rows="5"
+                maxlength="500"
+                show-word-limit
+                placeholder="补充场景说明"
+              />
+            </el-form-item>
+
+            <el-alert
+              title="场景不包含时间信息，保存后可在全部任务中继续添加场景内任务。"
+              type="info"
+              show-icon
+              :closable="false"
+              class="task-dialog-alert"
+            />
+          </div>
+
+          <template v-else>
+            <div v-show="taskDialogStep === 0" class="task-dialog-page">
+              <el-form-item label="标题" prop="title">
+                <el-input v-model="taskForm.title" placeholder="请输入任务标题" maxlength="120" show-word-limit />
+              </el-form-item>
+
+              <el-form-item label="描述（可选）" prop="description">
+                <el-input
+                  v-model="taskForm.description"
+                  type="textarea"
+                  :rows="4"
+                  maxlength="500"
+                  show-word-limit
+                  placeholder="补充任务说明"
+                />
+              </el-form-item>
+
+              <el-row :gutter="14">
+                <el-col :xs="24" :sm="12">
+                  <el-form-item label="类型" prop="type">
+                    <template v-if="taskForm.type !== 3">
+                      <el-select v-model="taskForm.type" class="w-full">
+                        <el-option
+                          v-for="option in taskTypeOptions"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                      </el-select>
+                    </template>
+                    <template v-else>
+                      <el-tag type="warning">场景</el-tag>
+                    </template>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </div>
+
+            <div v-show="taskDialogStep === 1" class="task-dialog-page">
+              <div v-if="isRecurringTask" class="task-dialog-section-block">
+                <div class="task-dialog-section-title">循环周期</div>
+                <el-row :gutter="14" class="task-recurrence-row">
+                  <el-col :xs="24" :sm="10">
+                    <el-form-item label="循环尺度" prop="cycleMode">
+                      <el-select v-model="taskForm.cycleMode" class="w-full">
+                        <el-option
+                          v-for="option in cycleModeOptions"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+
+                  <el-col :xs="24" :sm="14">
+                    <el-form-item v-if="taskForm.cycleMode === 'interval'" label="具体选择" prop="cycleIntervalDays">
+                      <el-input-number v-model="taskForm.cycleIntervalDays" :min="1" :step="1" controls-position="right" class="w-full" />
+                    </el-form-item>
+
+                    <el-form-item v-else-if="taskForm.cycleMode === 'weekly'" label="具体选择" prop="cycleWeekdays">
+                      <el-select v-model="taskForm.cycleWeekdays" multiple collapse-tags collapse-tags-tooltip class="w-full" placeholder="选择一个或多个星期">
+                        <el-option
+                          v-for="option in weekdayOptions"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item v-else-if="taskForm.cycleMode === 'monthly'" label="具体选择" prop="cycleMonthDays">
+                      <el-select v-model="taskForm.cycleMonthDays" multiple collapse-tags collapse-tags-tooltip class="w-full" placeholder="选择一个或多个日期">
+                        <el-option
+                          v-for="option in monthDayOptions"
+                          :key="option.value"
+                          :label="option.label"
+                          :value="option.value"
+                        />
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <div class="task-dialog-helper-text">周期任务只按天计算，不需要选择具体时分。</div>
+              </div>
+
+              <div class="task-dialog-section-block">
+                <div class="task-dialog-section-title">计划用时</div>
+                <el-row :gutter="14" class="task-duration-row">
+                  <el-col :xs="24" :sm="12">
+                    <el-form-item label="小时" prop="planDurationHours">
+                      <el-input-number v-model="taskForm.planDurationHours" :min="0" :step="1" controls-position="right" class="w-full" />
+                    </el-form-item>
+                  </el-col>
+
+                  <el-col :xs="24" :sm="12">
+                    <el-form-item label="分钟" prop="planDurationMinutes">
+                      <el-input-number v-model="taskForm.planDurationMinutes" :min="0" :max="59" :step="1" controls-position="right" class="w-full" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+              </div>
+
+              <div v-if="isRecurringTask" class="task-dialog-section-block">
+                <div class="task-dialog-section-title">每日安排（可选）</div>
+                <el-row :gutter="10" class="task-datetime-row">
+                  <el-col :xs="24" :sm="12">
+                    <el-form-item label="开始时分">
+                      <el-time-picker
+                        :model-value="getTimePart(taskForm.startTime)"
+                        format="HH:mm"
+                        value-format="HH:mm:ss"
+                        placeholder="选择时分"
+                        class="w-full"
+                        @update:model-value="updateStartTimePart"
+                      />
+                    </el-form-item>
+                  </el-col>
+
+                  <el-col :xs="24" :sm="12">
+                    <el-form-item label="结束时分">
+                      <el-time-picker
+                        :model-value="getTimePart(taskForm.endTime)"
+                        format="HH:mm"
+                        value-format="HH:mm:ss"
+                        placeholder="选择时分"
+                        class="w-full"
+                        @update:model-value="updateEndTimePart"
+                      />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+              </div>
+
+              <div v-else class="task-dialog-section-block">
+                <div class="task-dialog-section-title">时间信息</div>
+                <el-form-item label="开始时间" prop="startTime">
+                  <el-row :gutter="10" class="task-datetime-row">
+                    <el-col :xs="24" :sm="12">
+                      <el-date-picker
+                        :model-value="getDatePart(taskForm.startTime)"
+                        type="date"
+                        format="YYYY-MM-DD"
+                        value-format="YYYY-MM-DD"
+                        placeholder="选择日期"
+                        class="w-full"
+                        @update:model-value="updateStartDatePart"
+                      />
+                    </el-col>
+
+                    <el-col :xs="24" :sm="12">
+                      <el-time-picker
+                        :model-value="getTimePart(taskForm.startTime)"
+                        format="HH:mm"
+                        value-format="HH:mm:ss"
+                        placeholder="选择时分"
+                        class="w-full"
+                        @update:model-value="updateStartTimePart"
+                      />
+                    </el-col>
+                  </el-row>
+                </el-form-item>
+
+                <el-form-item :label="String(taskForm.type) === '2' ? '完成时间' : '结束时间'" prop="endTime">
+                  <el-row :gutter="10" class="task-datetime-row">
+                    <el-col :xs="24" :sm="12">
+                      <el-date-picker
+                        :model-value="getDatePart(taskForm.endTime)"
+                        type="date"
+                        format="YYYY-MM-DD"
+                        value-format="YYYY-MM-DD"
+                        placeholder="选择日期"
+                        class="w-full"
+                        @update:model-value="updateEndDatePart"
+                      />
+                    </el-col>
+
+                    <el-col :xs="24" :sm="12">
+                      <el-time-picker
+                        :model-value="getTimePart(taskForm.endTime)"
+                        format="HH:mm"
+                        value-format="HH:mm:ss"
+                        placeholder="选择时分"
+                        class="w-full"
+                        @update:model-value="updateEndTimePart"
+                      />
+                    </el-col>
+                  </el-row>
+                </el-form-item>
+              </div>
+
+              <el-form-item v-if="String(taskForm.type) !== '0'" prop="settlementType">
+                <template #label>
+                  <span class="task-settlement-label">
+                    <span>结算模式</span>
+                    <el-tooltip
+                      effect="dark"
+                      placement="top"
+                      raw-content
+                      content="自动结算：累计用时达到计划时，自动标记为完成；<br />手动结算：需要用户点击‘完成’按钮才会标记为完成"
+                    >
+                      <span class="task-settlement-help" aria-label="结算模式说明">?</span>
+                    </el-tooltip>
+                  </span>
+                </template>
+                <el-select v-model="taskForm.settlementType" class="w-full">
+                  <el-option
+                    v-for="option in settlementTypeOptions"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value"
+                  />
+                </el-select>
+              </el-form-item>
+
+              <el-form-item v-if="taskDialogParent" label="是否同步时长到父任务" prop="inheritParentTime">
+                <el-switch
+                  v-model="taskForm.inheritParentTime"
+                  active-text="同步"
+                  inactive-text="不计入"
+                />
+              </el-form-item>
+            </div>
+          </template>
+        </el-form>
+
+        <template #footer>
+          <div class="task-dialog-footer">
+            <el-button @click="taskDialogVisible = false">取消</el-button>
+            <template v-if="isSceneDialog">
+              <el-button type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+            </template>
+            <template v-else>
+              <el-button v-if="taskDialogStep > 0" @click="taskDialogStep -= 1">上一步</el-button>
+              <el-button v-if="taskDialogStep === 0" type="warning" @click="goTaskDialogNext">下一步</el-button>
+              <el-button v-else type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+            </template>
+          </div>
+        </template>
+      </el-dialog>
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { FormInstance, FormRules } from 'element-plus';
 import { useAuthStore } from '@/stores/auth';
+import {
+  createTaskApi,
+  deleteTaskApi,
+  getAllTasksApi,
+  updateTaskApi,
+  toggleActiveApi,
+  toggleCompleteApi,
+  type TaskItem,
+} from '@/api/task';
+import { editReviewApi, getAllReviewsApi, type ReviewItem } from '@/api/review';
+
+type SectionKey = 'today' | 'todo' | 'all' | 'review';
+type RecurrenceMode = 'interval' | 'weekly' | 'monthly';
+
+interface TreeTask extends TaskItem {
+  children?: TreeTask[];
+}
+
+interface ParsedCronConfig {
+  cycleMode: RecurrenceMode;
+  cycleIntervalDays: number;
+  cycleWeekdays: number[];
+  cycleMonthDays: number[];
+}
+
+interface CycleFieldValues {
+  cycleIntervalDays: number;
+  cycleWeekdays: number[];
+  cycleMonthDays: number[];
+}
+
+interface TaskDialogForm {
+  taskId: number | null;
+  parentId: number | null;
+  title: string;
+  description: string;
+  type: number;
+  settlementType: number;
+  planDurationHours: number;
+  planDurationMinutes: number;
+  startTime: string;
+  endTime: string;
+  cycleMode: RecurrenceMode;
+  cycleIntervalDays: number;
+  cycleWeekdays: number[];
+  cycleMonthDays: number[];
+  inheritParentTime: boolean;
+  active: boolean;
+  isCompleted: boolean;
+}
 
 const router = useRouter();
 const authStore = useAuthStore();
-const draftTask = ref('');
+
+const activeSection = ref<SectionKey>('today');
+const loadingTasks = ref(false);
+const savingReview = ref(false);
+const taskDialogVisible = ref(false);
+const taskDialogStep = ref(0);
+const taskDialogMode = ref<'create' | 'edit'>('create');
+const taskDialogLoading = ref(false);
+const taskDialogParent = ref<TaskItem | null>(null);
+const taskFormRef = ref<FormInstance>();
+const allTasks = ref<TaskItem[]>([]);
+const reviewHistory = ref<ReviewItem[]>([]);
+const selectedReviewId = ref<number | null>(null);
+const reviewDraft = ref('');
+
+const taskTypeOptions: Array<{ label: string; value: number }> = [
+  { label: '随手记', value: 0 },
+  { label: '周期任务', value: 1 },
+  { label: 'DDL', value: 2 },
+];
+
+const recurringDefaultTime = '04:00:00';
+
+const cycleModeOptions: Array<{ label: string; value: RecurrenceMode }> = [
+  { label: '每几天执行一次', value: 'interval' as const },
+  { label: '每周指定星期', value: 'weekly' as const },
+  { label: '每月指定日期', value: 'monthly' as const },
+];
+
+const weekdayOptions: Array<{ label: string; value: number }> = [
+  { label: '周一', value: 1 },
+  { label: '周二', value: 2 },
+  { label: '周三', value: 3 },
+  { label: '周四', value: 4 },
+  { label: '周五', value: 5 },
+  { label: '周六', value: 6 },
+  { label: '周日', value: 7 },
+];
+
+const monthDayOptions: Array<{ label: string; value: number }> = Array.from({ length: 31 }, (_, index) => ({
+  label: `${index + 1}号`,
+  value: index + 1,
+}));
+
+const weekdayNameMap: Record<number, string> = {
+  1: 'MON',
+  2: 'TUE',
+  3: 'WED',
+  4: 'THU',
+  5: 'FRI',
+  6: 'SAT',
+  7: 'SUN',
+};
+
+const weekdayTokenMap: Record<string, number> = {
+  MON: 1,
+  TUE: 2,
+  WED: 3,
+  THU: 4,
+  FRI: 5,
+  SAT: 6,
+  SUN: 7,
+};
+
+const settlementTypeOptions: Array<{ label: string; value: number }> = [
+  { label: '手动结算', value: 0 },
+  { label: '自动结算', value: 1 },
+];
+
+const normalizeNumberList = (values: number[]) => Array.from(new Set(values)).sort((left, right) => left - right);
+
+const getTodayDatePart = () => {
+  const now = new Date();
+  const pad = (num: number) => `${num}`.padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+};
+
+const combineDateWithTime = (timeValue?: string) => {
+  if (!timeValue) return '';
+  return `${getTodayDatePart()} ${timeValue}`;
+};
+
+const parseCronConfig = (cron?: string): ParsedCronConfig | null => {
+  if (!cron) return null;
+
+  const compact = cron.trim().toUpperCase();
+  const intervalMatch = /^DAY_INTERVAL\|(\d+)\|([0-9T:-]+)$/.exec(compact);
+  if (intervalMatch) {
+    return {
+      cycleMode: 'interval',
+      cycleIntervalDays: Math.max(1, Number(intervalMatch[1]) || 1),
+      cycleWeekdays: [],
+      cycleMonthDays: [],
+    };
+  }
+
+  const weeklyMatch = /^0\s+(\d+)\s+(\d+)\s+\?\s+\*\s+([A-Z,\-]+)$/.exec(compact);
+  if (weeklyMatch) {
+    const tokens = weeklyMatch[3].split(',').flatMap((token) => token.split('-'));
+    const cycleWeekdays = normalizeNumberList(
+      tokens
+        .map((token) => weekdayTokenMap[token.trim()])
+        .filter((value): value is number => Number.isFinite(value)),
+    );
+    if (cycleWeekdays.length > 0) {
+      return {
+        cycleMode: 'weekly',
+        cycleIntervalDays: 1,
+        cycleWeekdays,
+        cycleMonthDays: [],
+      };
+    }
+  }
+
+  const monthlyMatch = /^0\s+(\d+)\s+(\d+)\s+([0-9,]+)\s+\*\s+\?$/.exec(compact);
+  if (monthlyMatch) {
+    const cycleMonthDays = normalizeNumberList(
+      monthlyMatch[3]
+        .split(',')
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value >= 1 && value <= 31),
+    );
+    if (cycleMonthDays.length > 0) {
+      return {
+        cycleMode: 'monthly',
+        cycleIntervalDays: 1,
+        cycleWeekdays: [],
+        cycleMonthDays,
+      };
+    }
+  }
+
+  const legacyDayMatch = /^0\s+\d+\s+\d+\s+1\/(\d+)\s+\*\s+\?$/.exec(compact);
+  if (legacyDayMatch) {
+    return {
+      cycleMode: 'interval',
+      cycleIntervalDays: Math.max(1, Number(legacyDayMatch[1]) || 1),
+      cycleWeekdays: [],
+      cycleMonthDays: [],
+    };
+  }
+
+  const legacyWeekMatch = /^0\s+\d+\s+\d+\s+\?\s+\*\s+([A-Z]{3})\/(\d+)$/.exec(compact);
+  if (legacyWeekMatch) {
+    const weekday = weekdayTokenMap[legacyWeekMatch[1]];
+    return {
+      cycleMode: 'weekly',
+      cycleIntervalDays: Math.max(1, Number(legacyWeekMatch[2]) || 1),
+      cycleWeekdays: weekday ? [weekday] : [],
+      cycleMonthDays: [],
+    };
+  }
+
+  const legacyMonthMatch = /^0\s+\d+\s+\d+\s+(\d+)\s+1\/(\d+)\s+\?$/.exec(compact);
+  if (legacyMonthMatch) {
+    return {
+      cycleMode: 'monthly',
+      cycleIntervalDays: Math.max(1, Number(legacyMonthMatch[2]) || 1),
+      cycleWeekdays: [],
+      cycleMonthDays: [Math.max(1, Number(legacyMonthMatch[1]) || 1)],
+    };
+  }
+
+  return null;
+};
+
+const createRecurringTimeValue = (dateValue?: string) => {
+  if (!dateValue) return '';
+  return combineDateWithTime(dateValue);
+};
+
+const normalizeCycleValues = (mode: RecurrenceMode, form: CycleFieldValues) => {
+  if (mode === 'interval') {
+    return `interval:${Math.max(1, Number(form.cycleIntervalDays || 1))}`;
+  }
+
+  if (mode === 'weekly') {
+    return `weekly:${normalizeNumberList(form.cycleWeekdays).map((value) => weekdayNameMap[value]).filter(Boolean).join(',')}`;
+  }
+
+  return `monthly:${normalizeNumberList(form.cycleMonthDays).join(',')}`;
+};
+
+const normalizeParsedCycleValues = (mode: RecurrenceMode, parsed: ParsedCronConfig) => {
+  if (mode === 'interval') {
+    return `interval:${Math.max(1, Number(parsed.cycleIntervalDays || 1))}`;
+  }
+
+  if (mode === 'weekly') {
+    return `weekly:${normalizeNumberList(parsed.cycleWeekdays).map((value) => weekdayNameMap[value]).filter(Boolean).join(',')}`;
+  }
+
+  return `monthly:${normalizeNumberList(parsed.cycleMonthDays).join(',')}`;
+};
+
+const getCurrentCycleSignature = () => normalizeCycleValues(taskForm.cycleMode, {
+  cycleIntervalDays: taskForm.cycleIntervalDays,
+  cycleWeekdays: taskForm.cycleWeekdays,
+  cycleMonthDays: taskForm.cycleMonthDays,
+});
+
+const getParsedCycleSignature = (cron?: string) => {
+  const parsed = parseCronConfig(cron);
+  if (!parsed) return '';
+  return normalizeParsedCycleValues(parsed.cycleMode, parsed);
+};
+
+const createDefaultTaskForm = (
+  parentTask?: TaskItem | null,
+  sourceTask?: TaskItem | null,
+  presetType?: number | null,
+  defaultActive = true,
+): TaskDialogForm => {
+  const parentType = parentTask ? String(parentTask.type ?? '') : '';
+  const inheritedType = parentType === '3' ? 0 : Number(parentType || 0);
+  const sourceType = sourceTask ? Number(sourceTask.type ?? inheritedType ?? 0) : inheritedType;
+  const requestedType = Number(presetType ?? sourceType);
+  const normalizedType = Number.isFinite(requestedType) ? requestedType : 0;
+  const sourceSettlement = sourceTask ? Number(sourceTask.settlementType ?? 0) : Number(parentTask?.settlementType ?? 0);
+  const parsedCron = parseCronConfig(sourceTask?.cronConfig ?? parentTask?.cronConfig);
+  const sourceDurationSeconds = sourceTask?.targetDuration ?? parentTask?.targetDuration ?? 0;
+  const totalMinutes = Math.max(0, Math.round(sourceDurationSeconds / 60));
+  const resolveDefaultDateTime = (value?: string) => {
+    if (!value) return '';
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return '';
+
+    return normalizedType === 1 ? getTimePart(value) : formatDateTimeForPicker(value);
+  };
+
+  const defaultStartTime = normalizedType === 1
+    ? (sourceTask?.startTime ? resolveDefaultDateTime(sourceTask.startTime) : parentTask?.startTime ? resolveDefaultDateTime(parentTask.startTime) : '')
+    : (sourceTask?.startTime ? resolveDefaultDateTime(sourceTask.startTime) : parentTask?.startTime ? resolveDefaultDateTime(parentTask.startTime) : '');
+
+  const defaultEndTime = normalizedType === 1
+    ? (sourceTask?.endTime ? resolveDefaultDateTime(sourceTask.endTime) : parentTask?.endTime ? resolveDefaultDateTime(parentTask.endTime) : '')
+    : (sourceTask?.endTime ? resolveDefaultDateTime(sourceTask.endTime) : parentTask?.endTime ? resolveDefaultDateTime(parentTask.endTime) : '');
+
+  const form: TaskDialogForm = {
+    taskId: sourceTask?.taskId ?? null,
+    parentId: sourceTask ? (sourceTask.parentId ?? null) : (parentTask?.taskId ?? null),
+    title: sourceTask?.title ?? '',
+    description: sourceTask?.description ?? '',
+    type: normalizedType,
+    settlementType: Number.isFinite(sourceSettlement) ? sourceSettlement : 0,
+    planDurationHours: Math.floor(totalMinutes / 60),
+    planDurationMinutes: totalMinutes % 60,
+    startTime: defaultStartTime,
+    endTime: defaultEndTime,
+    cycleMode: parsedCron?.cycleMode ?? 'interval',
+    cycleIntervalDays: parsedCron?.cycleIntervalDays ?? 1,
+    cycleWeekdays: parsedCron?.cycleWeekdays ?? [],
+    cycleMonthDays: parsedCron?.cycleMonthDays ?? [],
+    inheritParentTime: sourceTask?.inheritParentTime ?? false,
+    active: sourceTask?.active ?? defaultActive,
+    isCompleted: sourceTask?.isCompleted ?? false,
+  };
+
+  return form;
+};
+
+const taskForm = reactive<TaskDialogForm>(createDefaultTaskForm());
+
+const displayUsername = computed(() => authStore.username || '未命名用户');
+const isRecurringTask = computed(() => String(taskForm.type) === '1');
+const taskDialogTitle = computed(() => {
+  if (taskDialogMode.value === 'edit') return '编辑任务';
+  if (taskForm.type === 3) return '新建场景';
+  return taskDialogParent.value ? '新建子任务' : '新建任务';
+});
+
+const taskDialogWarnings = computed(() => {
+  const warnings: string[] = [];
+  const parent = taskDialogParent.value;
+  if (!parent) return warnings;
+
+  const parentType = String(parent.type ?? '');
+  const childType = String(taskForm.type ?? '');
+
+  if (parentType === '2' && childType === '1') {
+    warnings.push('父任务已过期，是否继续当前周期任务？');
+  }
+
+  if (parentType === '1' && childType === '1' && parent.cronConfig) {
+    if (getParsedCycleSignature(parent.cronConfig) !== getCurrentCycleSignature()) {
+      warnings.push('父子任务的重复周期不一致，子任务将独立进行。');
+    }
+  }
+
+  if (parentType !== childType && warnings.length === 0) {
+    warnings.push(`父任务是${taskTypeLabel(parentType)}，当前子任务是${taskTypeLabel(childType)}，子任务将独立进行。`);
+  }
+
+  return Array.from(new Set(warnings));
+});
+
+const validateRecurringIntervalDays = (_rule: unknown, _value: unknown, callback: (error?: string | Error) => void) => {
+  if (taskForm.cycleMode !== 'interval') {
+    callback();
+    return;
+  }
+
+  if (Number(taskForm.cycleIntervalDays || 0) < 1) {
+    callback(new Error('请输入每几天执行一次'));
+    return;
+  }
+
+  callback();
+};
+
+const validateRecurringWeekdays = (_rule: unknown, _value: unknown, callback: (error?: string | Error) => void) => {
+  if (taskForm.cycleMode !== 'weekly') {
+    callback();
+    return;
+  }
+
+  if (!taskForm.cycleWeekdays.length) {
+    callback(new Error('请选择每周执行的星期'));
+    return;
+  }
+
+  callback();
+};
+
+const validateRecurringMonthDays = (_rule: unknown, _value: unknown, callback: (error?: string | Error) => void) => {
+  if (taskForm.cycleMode !== 'monthly') {
+    callback();
+    return;
+  }
+
+  if (!taskForm.cycleMonthDays.length) {
+    callback(new Error('请选择每月执行的日期'));
+    return;
+  }
+
+  callback();
+};
+
+const taskFormRules = computed<FormRules>(() => {
+  const rules: FormRules = {
+    title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
+  };
+
+  if (String(taskForm.type) === '1') {
+    rules.planDurationHours = [{ required: true, message: '周期任务需要填写计划用时', trigger: 'change' }];
+    rules.planDurationMinutes = [{ required: true, message: '周期任务需要填写计划用时', trigger: 'change' }];
+    rules.cycleMode = [{ required: true, message: '周期任务需要选择循环尺度', trigger: 'change' }];
+    rules.cycleIntervalDays = [{ validator: validateRecurringIntervalDays, trigger: 'change' }];
+    rules.cycleWeekdays = [{ validator: validateRecurringWeekdays, trigger: 'change' }];
+    rules.cycleMonthDays = [{ validator: validateRecurringMonthDays, trigger: 'change' }];
+  }
+
+  if (String(taskForm.type) === '2') {
+    rules.endTime = [{ required: true, message: 'DDL任务需要填写完成时间', trigger: 'change' }];
+  }
+
+  return rules;
+});
+
+watch(
+  () => taskForm.type,
+  (type) => {
+    if (String(type) === '0') {
+      taskForm.settlementType = 0;
+    }
+
+    if (String(type) !== '1') {
+      taskForm.cycleMode = 'interval';
+      taskForm.cycleIntervalDays = 1;
+      taskForm.cycleWeekdays = [];
+      taskForm.cycleMonthDays = [];
+    }
+  },
+);
+
+const treeProps = {
+  children: 'children',
+  label: 'title',
+};
+
+const sectionMeta = {
+  today: { label: '今日任务', badge: 'TODAY FOCUS', description: '完成时间在今日且仍处于激活中的任务。' },
+  todo: { label: '待办任务', badge: 'TODO LIST', description: '未完成且激活的任务，按今日和后续分组。' },
+  all: { label: '全部任务', badge: 'ALL TASKS', description: '' },
+  review: { label: '回顾', badge: 'DAILY REVIEW', description: '今日总结草稿 + 历史 review 详情。' },
+} as const;
+
+const todayKey = computed(() => formatDateKey(new Date()));
+const draftStorageKey = computed(() => `mychecklist-review-draft-${todayKey.value}`);
 
 const todayLabel = computed(() => {
   const date = new Date();
@@ -57,24 +1213,582 @@ const todayLabel = computed(() => {
   });
 });
 
+const sectionItems = computed<Array<{ key: SectionKey; label: string; countLabel: string }>>(() => {
+  const items: Array<{ key: SectionKey; label: string; countLabel: string }> = [
+    { key: 'today', label: sectionMeta.today.label, countLabel: `${countTree(currentTodayTree.value)} 项` },
+    { key: 'todo', label: sectionMeta.todo.label, countLabel: `${countTree(currentTodoTree.value)} 项` },
+    { key: 'all', label: sectionMeta.all.label, countLabel: `${countTree(currentAllTree.value)} 项` },
+    { key: 'review', label: sectionMeta.review.label, countLabel: `${reviewHistory.value.length} 条` },
+  ];
+  return items;
+});
+
+const setActiveSection = (key: string) => {
+  if (key === 'today' || key === 'todo' || key === 'all' || key === 'review') {
+    activeSection.value = key;
+  }
+};
+
+const activeSectionTitle = computed(() => sectionMeta[activeSection.value].label);
+const activeSectionBadge = computed(() => sectionMeta[activeSection.value].badge);
+const isSceneDialog = computed(() => taskDialogMode.value === 'create' && String(taskForm.type) === '3');
+
+const currentAllTree = computed(() => buildTree(allTasks.value));
+const sceneTaskTree = computed(() => filterSceneTree(currentAllTree.value));
+const nonSceneTaskTree = computed(() => filterNonSceneTree(currentAllTree.value));
+const currentTodayTree = computed(() => filterTree(currentAllTree.value, isTodayTask));
+const currentTodoTree = computed(() => filterTree(currentAllTree.value, isTodoTask));
+const currentTodoTodayTree = computed(() => filterTree(currentAllTree.value, isTodoTodayTask));
+const currentTodoFutureTree = computed(() => filterTree(currentAllTree.value, isTodoFutureTask));
+const currentTaskTree = computed(() => {
+  if (activeSection.value === 'today') return currentTodayTree.value;
+  if (activeSection.value === 'todo') return currentTodoTree.value;
+  return currentAllTree.value;
+});
+
+const selectedReview = computed(() => reviewHistory.value.find((item) => item.reviewId === selectedReviewId.value) ?? null);
+
+const resetTaskDialog = () => {
+  Object.assign(taskForm, createDefaultTaskForm());
+  taskDialogStep.value = 0;
+  taskDialogMode.value = 'create';
+  taskDialogParent.value = null;
+  taskDialogLoading.value = false;
+  taskFormRef.value?.clearValidate();
+};
+
+const findTaskById = (taskId: number | null | undefined) => {
+  if (taskId == null) return null;
+  return allTasks.value.find((task) => task.taskId === taskId) ?? null;
+};
+
+const openCreateTaskDialog = (parentTask?: TaskItem | null, defaultActive = true) => {
+  taskDialogMode.value = 'create';
+  taskDialogParent.value = parentTask ?? null;
+  Object.assign(taskForm, createDefaultTaskForm(parentTask ?? null, null, undefined, defaultActive));
+  taskDialogStep.value = 0;
+  taskDialogVisible.value = true;
+};
+
+const openCreateSceneDialog = () => {
+  taskDialogMode.value = 'create';
+  taskDialogParent.value = null;
+  Object.assign(taskForm, createDefaultTaskForm(null, null, 3, true));
+  taskDialogStep.value = 0;
+  taskDialogVisible.value = true;
+};
+
+const openEditTaskDialog = (task: TaskItem) => {
+  taskDialogMode.value = 'edit';
+  taskDialogParent.value = findTaskById(task.parentId);
+  Object.assign(taskForm, createDefaultTaskForm(taskDialogParent.value, task));
+  taskDialogStep.value = 0;
+  taskDialogVisible.value = true;
+};
+
+const goTaskDialogNext = async () => {
+  if (!taskFormRef.value) {
+    taskDialogStep.value = 1;
+    return;
+  }
+
+  try {
+    await taskFormRef.value.validateField('title');
+    taskDialogStep.value = 1;
+  } catch {
+    // 校验提示由表单自身展示
+  }
+};
+
+const buildCronConfig = () => {
+  if (String(taskForm.type) !== '1') return undefined;
+  const recurringTime = getTimePart(taskForm.startTime) || recurringDefaultTime;
+  const [hour, minute] = recurringTime.split(':');
+  const anchor = taskForm.startTime
+    ? (taskForm.startTime.includes('T') || taskForm.startTime.includes(' ') ? taskForm.startTime.replace(' ', 'T') : `${getTodayDatePart()}T${recurringTime}`)
+    : `${getTodayDatePart()}T${recurringDefaultTime}`;
+
+  if (taskForm.cycleMode === 'interval') {
+    return anchor ? `DAY_INTERVAL|${Math.max(1, Number(taskForm.cycleIntervalDays || 1))}|${anchor}` : undefined;
+  }
+
+  if (taskForm.cycleMode === 'weekly') {
+    const days = normalizeNumberList(taskForm.cycleWeekdays).map((value) => weekdayNameMap[value]).filter(Boolean);
+    return days.length ? `0 ${minute} ${hour} ? * ${days.join(',')}` : undefined;
+  }
+
+  const days = normalizeNumberList(taskForm.cycleMonthDays).filter((value) => value >= 1 && value <= 31);
+  return days.length ? `0 ${minute} ${hour} ${days.join(',')} * ?` : undefined;
+};
+
+const buildTaskPayload = () => {
+  const totalDurationSeconds = Math.max(0, (Number(taskForm.planDurationHours || 0) * 3600) + (Number(taskForm.planDurationMinutes || 0) * 60));
+  const normalizeDateTimeForApi = (value?: string) => {
+    if (!value) return undefined;
+    return value.includes('T') ? value : value.replace(' ', 'T');
+  };
+  const normalizeRecurringDateTimeForApi = (value?: string) => {
+    if (!value) return undefined;
+    if (value.includes('T')) return value;
+    if (value.includes(' ')) return value.replace(' ', 'T');
+    return `${getTodayDatePart()}T${value.length === 5 ? `${value}:00` : value}`;
+  };
+
+  const payload: Record<string, unknown> = {
+    taskId: taskForm.taskId ?? undefined,
+    parentId: taskForm.parentId ?? undefined,
+    title: taskForm.title.trim(),
+    description: taskForm.description.trim() || undefined,
+    type: String(taskForm.type),
+    settlementType: String(taskForm.settlementType),
+    targetDuration: totalDurationSeconds,
+    startTime: String(taskForm.type) === '1' ? normalizeRecurringDateTimeForApi(taskForm.startTime) : normalizeDateTimeForApi(taskForm.startTime),
+    endTime: String(taskForm.type) === '1' ? normalizeRecurringDateTimeForApi(taskForm.endTime) : normalizeDateTimeForApi(taskForm.endTime),
+    cronConfig: buildCronConfig(),
+    inheritParentTime: taskDialogParent.value ? taskForm.inheritParentTime : undefined,
+    active: taskForm.active,
+    isCompleted: taskForm.isCompleted,
+  };
+
+  return payload;
+};
+
+const submitTaskDialog = async () => {
+  if (!taskFormRef.value) return;
+
+  try {
+    await taskFormRef.value.validate();
+  } catch {
+    return;
+  }
+
+  taskDialogLoading.value = true;
+  try {
+    const payload = buildTaskPayload();
+    const response = taskDialogMode.value === 'edit'
+      ? await updateTaskApi(payload)
+      : await createTaskApi(payload);
+    ElMessage.success(response.data || (taskDialogMode.value === 'edit' ? '任务已更新' : '任务已创建'));
+    taskDialogVisible.value = false;
+    await loadTasks();
+  } catch {
+    // 具体错误由全局拦截器提示；这里吞掉异常避免事件处理器抛出未处理 promise
+  } finally {
+    taskDialogLoading.value = false;
+  }
+};
+
+const deleteTask = async (task: TaskItem) => {
+  try {
+    await ElMessageBox.confirm(`确认删除任务「${task.title}」及其所有子任务吗？`, '删除任务', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    });
+  } catch {
+    return;
+  }
+
+  await deleteTaskApi(task.taskId);
+  ElMessage.success('任务已删除');
+  await loadTasks();
+};
+
+const loadTasks = async () => {
+  loadingTasks.value = true;
+  try {
+    const response = await getAllTasksApi();
+    allTasks.value = response.data || [];
+  } finally {
+    loadingTasks.value = false;
+  }
+};
+
+const loadReviews = async () => {
+  const response = await getAllReviewsApi();
+  reviewHistory.value = [...(response.data || [])].sort((left, right) => right.date.localeCompare(left.date));
+
+  const todayReview = reviewHistory.value.find((item) => formatDateKey(item.date) === todayKey.value);
+  if (todayReview) {
+    selectedReviewId.value = todayReview.reviewId;
+  } else if (!selectedReviewId.value && reviewHistory.value.length) {
+    selectedReviewId.value = reviewHistory.value[0].reviewId;
+  }
+
+  const storedDraft = window.localStorage.getItem(draftStorageKey.value);
+  if (storedDraft !== null) {
+    reviewDraft.value = storedDraft;
+  } else if (todayReview?.content) {
+    reviewDraft.value = todayReview.content;
+  }
+};
+
+const syncReviewDraft = () => {
+  window.localStorage.setItem(draftStorageKey.value, reviewDraft.value);
+};
+
+const saveDraft = () => {
+  syncReviewDraft();
+  ElMessage.success('草稿已保存在本地浏览器');
+};
+
+const saveReviewToServer = async () => {
+  savingReview.value = true;
+  try {
+    await editReviewApi(todayKey.value, reviewDraft.value);
+    syncReviewDraft();
+    ElMessage.success('今日总结已保存到后端');
+    await loadReviews();
+  } finally {
+    savingReview.value = false;
+  }
+};
+
+const selectReview = (review: ReviewItem) => {
+  selectedReviewId.value = review.reviewId;
+};
+
 const handleLogout = async () => {
   authStore.logout();
   await router.push('/login');
 };
+
+const toggleActive = async (task: TreeTask) => {
+  await toggleActiveApi(task.taskId, !Boolean(task.active));
+  ElMessage.success('任务状态已更新');
+  await loadTasks();
+};
+
+const toggleComplete = async (task: TreeTask) => {
+  await toggleCompleteApi(task.taskId, !Boolean(task.isCompleted));
+  ElMessage.success('完成状态已更新');
+  await loadTasks();
+};
+
+const taskTypeLabel = (type?: string) => {
+  switch (String(type)) {
+    case '0':
+      return '随手记';
+    case '1':
+      return '周期任务';
+    case '2':
+      return 'DDL';
+    case '3':
+      return '场景';
+    default:
+      return '任务';
+  }
+};
+
+const taskTypeTagType = (type?: string) => {
+  switch (String(type)) {
+    case '3':
+      return 'warning';
+    case '1':
+      return 'success';
+    case '2':
+      return 'danger';
+    default:
+      return 'info';
+  }
+};
+
+function formatDateTimeForPicker(value?: string) {
+  if (!value) return '';
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const pad = (num: number) => `${num}`.padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function getDatePart(value?: string) {
+  if (!value) return '';
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const pad = (num: number) => `${num}`.padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function getTimePart(value?: string) {
+  if (!value) return '';
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+    return value.length === 5 ? `${value}:00` : value;
+  }
+
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const pad = (num: number) => `${num}`.padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function updateDatePart(field: 'startTime' | 'endTime', dateValue?: string) {
+  if (!dateValue) {
+    taskForm[field] = '';
+    return;
+  }
+
+  if (String(taskForm.type) === '1') {
+    taskForm[field] = createRecurringTimeValue(dateValue);
+    return;
+  }
+
+  const currentTime = getTimePart(taskForm[field]) || '00:00:00';
+  taskForm[field] = `${dateValue} ${currentTime}`;
+}
+
+function updateTimePart(field: 'startTime' | 'endTime', timeValue?: string) {
+  if (!timeValue) {
+    taskForm[field] = '';
+    return;
+  }
+
+  if (String(taskForm.type) === '1') {
+    taskForm[field] = combineDateWithTime(timeValue);
+    return;
+  }
+
+  const currentDate = getDatePart(taskForm[field]);
+  if (!currentDate) {
+    taskForm[field] = `${getTodayDatePart()} ${timeValue}`;
+    return;
+  }
+  taskForm[field] = `${currentDate} ${timeValue}`;
+}
+
+const updateStartDatePart = (value?: string) => updateDatePart('startTime', value);
+const updateStartTimePart = (value?: string) => updateTimePart('startTime', value);
+const updateEndDatePart = (value?: string) => updateDatePart('endTime', value);
+const updateEndTimePart = (value?: string) => updateTimePart('endTime', value);
+
+const reviewSnippet = (content?: string) => {
+  if (!content) return '暂无内容';
+  const compact = content.replace(/\s+/g, ' ').trim();
+  return compact.length > 60 ? `${compact.slice(0, 60)}...` : compact;
+};
+
+const prettyJson = (value?: string) => {
+  if (!value) return '';
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
+};
+
+const formatDuration = (seconds?: number) => {
+  const value = Number(seconds || 0);
+  const totalMinutes = Math.floor(value / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const remainingSeconds = value % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+};
+
+const formatDateOnly = (value?: string) => {
+  if (!value) return '-';
+  return new Date(value).toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+};
+
+const formatDateTime = (value?: string) => {
+  if (!value) return '-';
+  return new Date(value).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
+const formatDateKey = (value: string | Date) => {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const startOfToday = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+};
+
+const endOfToday = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+};
+
+const isScene = (task: TaskItem) => String(task.type) === '3';
+
+const isTodayTask = (task: TaskItem) => {
+  if (isScene(task)) return false;
+  if (!Boolean(task.active) || !task.endTime) return false;
+  return formatDateKey(task.endTime) === todayKey.value;
+};
+
+const isTodoTask = (task: TaskItem) => Boolean(task.active) && !Boolean(task.isCompleted);
+
+const isTodoTodayTask = (task: TaskItem) => {
+  if (!isTodoTask(task)) return false;
+  if (!task.endTime) return false;
+  return formatDateKey(task.endTime) === todayKey.value;
+};
+
+const isTodoFutureTask = (task: TaskItem) => {
+  if (!isTodoTask(task)) return false;
+  if (!task.endTime) return true;
+  return formatDateKey(task.endTime) !== todayKey.value;
+};
+
+const buildTree = (tasks: TaskItem[]) => {
+  const nodeMap = new Map<number, TreeTask>();
+  const roots: TreeTask[] = [];
+
+  tasks.forEach((task) => {
+    nodeMap.set(task.taskId, { ...task, children: [] });
+  });
+
+  tasks.forEach((task) => {
+    const current = nodeMap.get(task.taskId)!;
+    const parentId = task.parentId ?? null;
+    if (parentId && nodeMap.has(parentId)) {
+      nodeMap.get(parentId)!.children!.push(current);
+    } else {
+      roots.push(current);
+    }
+  });
+
+  return sortTree(roots);
+};
+
+const sortTree = (nodes: TreeTask[]) => {
+  nodes.sort((left, right) => {
+    const typeDiff = taskOrderRank(left) - taskOrderRank(right);
+    if (typeDiff !== 0) return typeDiff;
+    return String(left.title || '').localeCompare(String(right.title || ''), 'zh-CN');
+  });
+
+  nodes.forEach((node) => {
+    if (node.children?.length) {
+      node.children = sortTree(node.children);
+    }
+  });
+
+  return nodes;
+};
+
+const filterSceneTree = (nodes: TreeTask[]): TreeTask[] => {
+  return nodes.reduce<TreeTask[]>((accumulator, node) => {
+    if (isScene(node)) {
+      accumulator.push({
+        ...node,
+        children: node.children ? filterSceneTree(node.children) : [],
+      });
+      return accumulator;
+    }
+
+    if (node.children?.length) {
+      accumulator.push(...filterSceneTree(node.children));
+    }
+
+    return accumulator;
+  }, []);
+};
+
+const filterNonSceneTree = (nodes: TreeTask[]): TreeTask[] => {
+  return nodes.reduce<TreeTask[]>((accumulator, node) => {
+    if (isScene(node)) return accumulator;
+
+    accumulator.push({
+      ...node,
+      children: node.children ? filterNonSceneTree(node.children) : [],
+    });
+    return accumulator;
+  }, []);
+};
+
+const taskOrderRank = (task: TaskItem) => {
+  switch (String(task.type)) {
+    case '3':
+      return 0;
+    case '1':
+      return 1;
+    case '2':
+      return 2;
+    default:
+      return 3;
+  }
+};
+
+const filterTree = (nodes: TreeTask[], predicate: (task: TaskItem) => boolean): TreeTask[] => {
+  return nodes.reduce<TreeTask[]>((accumulator, node) => {
+    const filteredChildren = node.children ? filterTree(node.children, predicate) : [];
+    if (predicate(node) || filteredChildren.length > 0) {
+      accumulator.push({ ...node, children: filteredChildren });
+    }
+    return accumulator;
+  }, []);
+};
+
+const countTree = (nodes: TreeTask[], predicate?: (task: TaskItem) => boolean): number => {
+  return nodes.reduce((sum, node) => {
+    const self = predicate ? (predicate(node) ? 1 : 0) : 1;
+    return sum + self + countTree(node.children || [], predicate);
+  }, 0);
+};
+
+onMounted(async () => {
+  await Promise.all([loadTasks(), loadReviews()]);
+  const storedDraft = window.localStorage.getItem(draftStorageKey.value);
+  if (storedDraft !== null) {
+    reviewDraft.value = storedDraft;
+  }
+});
+
+watch(reviewDraft, (value) => {
+  window.localStorage.setItem(draftStorageKey.value, value);
+});
+
+onBeforeUnmount(() => {
+  if (reviewDraft.value.trim()) {
+    syncReviewDraft();
+  }
+});
 </script>
 
 <style scoped>
 .home-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  background: linear-gradient(180deg, #fafafa 0%, #f3f4f6 100%);
+  background:
+    radial-gradient(circle at 20% 15%, rgba(247, 213, 74, 0.14), transparent 24%),
+    radial-gradient(circle at 80% 18%, rgba(255, 236, 145, 0.12), transparent 18%),
+    linear-gradient(135deg, #fafafa 0%, #f4f5f7 100%);
 }
 
 .sidebar {
   padding: 20px 14px;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.94);
   border-right: 1px solid rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 
 .brand {
@@ -100,26 +1814,72 @@ const handleLogout = async () => {
   font-weight: 700;
 }
 
-.brand-subtitle {
+.sidebar-footnote {
   color: #8a92a2;
   font-size: 12px;
+  line-height: 1.6;
+}
+
+.user-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 8px 14px;
+  padding: 14px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  box-shadow: 0 10px 24px rgba(24, 24, 24, 0.06);
+}
+
+.user-card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: rgba(247, 213, 74, 0.18);
+  color: #8f6b00;
+  font-size: 18px;
+  flex: 0 0 auto;
+}
+
+.user-card-content {
+  min-width: 0;
+}
+
+.user-card-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .nav-item {
   width: 100%;
-  padding: 12px 14px;
+  padding: 14px 14px;
   text-align: left;
   border: none;
-  border-radius: 12px;
+  border-radius: 14px;
   background: transparent;
   color: #394150;
   font-size: 14px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nav-item small {
+  color: #a3adba;
 }
 
 .nav-item.active,
@@ -128,8 +1888,30 @@ const handleLogout = async () => {
   color: #1f2329;
 }
 
+.sidebar-bottom {
+  margin-top: auto;
+  padding: 18px 8px 6px;
+}
+
+.logout-btn {
+  width: 100%;
+  color: #8b5e00;
+  background: linear-gradient(180deg, #ffdf7a 0%, #f7c948 100%);
+  border-color: rgba(201, 153, 0, 0.45);
+  box-shadow: 0 10px 22px rgba(247, 201, 72, 0.28);
+}
+
+.logout-btn:hover,
+.logout-btn:focus-visible {
+  color: #6f4a00;
+  background: linear-gradient(180deg, #ffd55b 0%, #f0bc2d 100%);
+  border-color: rgba(174, 124, 0, 0.55);
+  box-shadow: 0 12px 24px rgba(247, 201, 72, 0.36);
+}
+
 .content-area {
   padding: 28px;
+  overflow: auto;
 }
 
 .content-topbar {
@@ -137,12 +1919,13 @@ const handleLogout = async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .content-topbar h1 {
   margin: 0 0 6px;
-  font-size: 28px;
+  font-size: 30px;
+  letter-spacing: -0.04em;
 }
 
 .content-topbar p {
@@ -150,27 +1933,375 @@ const handleLogout = async () => {
   color: #8a92a2;
 }
 
-.task-card {
-  padding: 20px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 16px 40px rgba(24, 24, 24, 0.06);
+.content-topbar p small {
+  margin-left: 10px;
+  color: #9aa2af;
+  font-size: 12px;
 }
 
-.task-input-row {
+.section-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.section-toolbar-left {
+  justify-content: flex-start;
+}
+
+.panel-card {
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 48px rgba(24, 24, 24, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+}
+
+.panel-card {
+  padding: 20px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel-head-actions-left {
+  justify-content: flex-start;
+}
+
+.panel-head-compact {
+  align-items: center;
+}
+
+.panel-head-stacked {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.panel-head-stacked .panel-head-title {
+  margin-left: 0;
+}
+
+.panel-head-stacked .panel-head-actions {
+  margin-top: 8px;
+}
+
+.panel-head-title {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f2329;
+}
+
+.panel-head h3 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.panel-head p {
+  margin: 0;
+  color: #8a92a2;
+  line-height: 1.6;
+}
+
+.panel-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-tree {
+  background: transparent;
+}
+
+.task-node {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.task-node-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-node-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-node-title {
+  font-weight: 700;
+  color: #1f2329;
+}
+
+.task-inline-action {
+  padding: 0;
+  font-size: 12px;
+}
+
+.task-dialog-section-title {
+  margin: 4px 0 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2329;
+}
+
+.task-dialog-section-block {
+  margin-top: 2px;
+}
+
+.task-dialog-helper-text {
+  margin-top: 6px;
+  color: #8a92a2;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-settlement-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  color: #1f2329;
+}
+
+.task-settlement-help {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid #c4c9d1;
+  color: #8a92a2;
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
+.task-node-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #8a92a2;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.task-node-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.review-layout {
   display: grid;
-  grid-template-columns: 1fr auto;
+  gap: 18px;
+}
+
+.task-split-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.task-split-card {
+  display: grid;
+}
+
+.review-editor-card {
+  display: grid;
   gap: 12px;
 }
 
-.task-empty {
-  margin-top: 18px;
-  min-height: 280px;
-  border-radius: 16px;
-  border: 1px dashed rgba(0, 0, 0, 0.1);
-  display: grid;
-  place-items: center;
+.review-tips {
   color: #8a92a2;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+}
+
+.review-list {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.review-item {
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 16px;
+  background: #fff;
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.review-item.active,
+.review-item:hover {
+  border-color: rgba(247, 213, 74, 0.6);
+  box-shadow: 0 10px 22px rgba(247, 213, 74, 0.12);
+}
+
+.review-item-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.review-item-top strong {
+  font-size: 15px;
+}
+
+.review-item-top span,
+.review-item-snippet {
+  color: #8a92a2;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.review-detail-card {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detail-item {
+  border-radius: 16px;
+  background: linear-gradient(180deg, #fff9e0, #fff);
+  padding: 14px;
+  border: 1px solid rgba(247, 213, 74, 0.2);
+}
+
+.detail-item span {
+  display: block;
+  color: #8f6b00;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.detail-item strong {
+  font-size: 20px;
+}
+
+.detail-block {
+  display: grid;
+  gap: 8px;
+}
+
+.detail-block-label {
+  color: #8f6b00;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.detail-pre {
+  margin: 0;
+  padding: 16px;
+  border-radius: 16px;
+  background: #f9fafc;
+  color: #394150;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+}
+
+.detail-footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.task-dialog :deep(.el-dialog__body) {
+  display: grid;
+  gap: 10px;
+  padding: 10px 20px 8px;
+}
+
+.task-dialog-steps {
+  margin-bottom: 4px;
+}
+
+.task-dialog-parent-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f7f9fc;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.task-dialog-parent-chip span {
+  color: #8a92a2;
+  font-size: 12px;
+}
+
+.task-dialog-alert {
+  margin: 0;
+}
+
+.task-dialog-form {
+  display: grid;
+}
+
+.task-dialog :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.task-datetime-row {
+  width: 100%;
+}
+
+.task-dialog-page {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+
+.task-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+@media (max-width: 1100px) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
@@ -181,6 +2312,30 @@ const handleLogout = async () => {
   .sidebar {
     border-right: none;
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  }
+}
+
+@media (max-width: 640px) {
+  .content-area {
+    padding: 14px;
+  }
+
+  .panel-card {
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .content-topbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .section-toolbar {
+    margin-bottom: 14px;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
