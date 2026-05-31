@@ -98,6 +98,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             normalizeRecurringSchedule(task);
         }
 
+        // 校验：如果同时存在起止时间，结束时间不得早于开始时间
+        if (task.getStartTime() != null && task.getEndTime() != null) {
+            if (task.getEndTime().isBefore(task.getStartTime())) {
+                return "创建失败：结束时间不能早于开始时间";
+            }
+        }
+
         return this.save(task) ? "创建成功" : "创建失败";
     }
 
@@ -112,6 +119,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
 
         if(task.getType() == TaskType.RECURRING) {
             normalizeRecurringSchedule(task);
+        }
+
+        // 校验：结束时间不得早于开始时间
+        if (task.getStartTime() != null && task.getEndTime() != null) {
+            if (task.getEndTime().isBefore(task.getStartTime())) {
+                return "更新失败：结束时间不能早于开始时间";
+            }
         }
 
         // 这里需要显式set每个字段
