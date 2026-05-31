@@ -94,7 +94,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             }
         }
 
-        normalizeRecurringSchedule(task);
+        if(task.getType() == TaskType.RECURRING) {
+            normalizeRecurringSchedule(task);
+        }
 
         return this.save(task) ? "创建成功" : "创建失败";
     }
