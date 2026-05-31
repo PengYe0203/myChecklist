@@ -1,6 +1,7 @@
 package cn.ppy.mychecklist.service.impl;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.enums.RunStatusType;
 import cn.ppy.mychecklist.enums.SettlementType;
@@ -104,7 +105,26 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 .one();
 
         if(oldTask == null) return "更新失败：任务不存在或不属于当前用户";
-        return this.updateById(task) ? "更新成功" : "更新失败";
+
+        // 这里需要显式set每个字段
+        // 因为如果直接updateById, 可能会忽略空字段，导致用户无法清空这些属性
+        LambdaUpdateWrapper<Task> updateWrapper = new LambdaUpdateWrapper<>();
+        updateWrapper.eq(Task::getTaskId, task.getTaskId())
+            .eq(Task::getUserId, this.getCurrentUserId())
+            .set(Task::getParentId, task.getParentId())
+            .set(Task::getTitle, task.getTitle())
+            .set(Task::getDescription, task.getDescription())
+            .set(Task::getType, task.getType())
+            .set(Task::getSettlementType, task.getSettlementType())
+            .set(Task::getTargetDuration, task.getTargetDuration())
+            .set(Task::getStartTime, task.getStartTime())
+            .set(Task::getEndTime, task.getEndTime())
+            .set(Task::getCronConfig, task.getCronConfig())
+            .set(Task::getInheritParentTime, task.getInheritParentTime())
+            .set(Task::isActive, task.isActive())
+            .set(Task::getIsCompleted, task.getIsCompleted());
+
+        return this.update(updateWrapper) ? "更新成功" : "更新失败";
     }
 
     @Override
