@@ -53,46 +53,42 @@
           :data="currentTodayTree"
           node-key="taskId"
           :props="treeProps"
-          default-expand-all
           :expand-on-click-node="false"
         >
           <template #default="{ data }">
             <div class="task-node">
-              <div class="task-node-main">
+              <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                 <div class="task-node-title-row">
+                  <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
+                    <Clock />
+                  </el-icon>
+                  <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(data.type) === '2'">
+                    <Calendar />
+                  </el-icon>
+                  <el-icon class="task-type-icon task-type-icon-note" v-else>
+                    <Document />
+                  </el-icon>
+                  <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                    <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                  </el-tooltip>
                   <span class="task-node-title">{{ data.title }}</span>
-                  <el-tag size="small" :type="taskTypeTagType(data.type)">
-                    {{ taskTypeLabel(data.type) }}
-                  </el-tag>
-                  <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
-                    {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
-                  </el-tag>
-                  <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
-                    + 子任务
-                  </el-button>
+                  
                 </div>
-
-                <div class="task-node-meta">
-                  <span v-if="data.description">{{ data.description }}</span>
-                  <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
-                  <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
-                  <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
+                  {{ formatTaskMetaSummary(data) }}
                 </div>
               </div>
 
-              <div class="task-node-actions">
-                <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
-                <el-button
-                  link
-                  type="success"
-                  @click.stop="toggleComplete(data)"
-                >
-                  {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                <div class="task-node-actions">
+                <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
+                  {{ data.isCompleted ? '撤回' : '完成' }}
                 </el-button>
-                <el-button link type="warning" @click.stop="toggleActive(data)">
+                <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data)">细分</el-button>
+                <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
                   {{ data.active ? '停用' : '启用' }}
                 </el-button>
-                <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
               </div>
             </div>
           </template>
@@ -117,42 +113,42 @@
             :data="currentTodoTodayTree"
             node-key="taskId"
             :props="treeProps"
-            default-expand-all
             :expand-on-click-node="false"
           >
             <template #default="{ data }">
               <div class="task-node">
-                <div class="task-node-main">
+                <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
-                    <span class="task-node-title">{{ data.title }}</span>
-                    <el-tag size="small" :type="taskTypeTagType(data.type)">
-                      {{ taskTypeLabel(data.type) }}
-                    </el-tag>
-                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
-                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
-                    </el-tag>
-                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
-                      + 子任务
-                    </el-button>
+                    <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
+                      <Clock />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(data.type) === '2'">
+                      <Calendar />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-note" v-else>
+                      <Document />
+                    </el-icon>
+                      <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                        <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                      </el-tooltip>
+                      <span class="task-node-title">{{ data.title }}</span>
+                    
                   </div>
-
-                  <div class="task-node-meta">
-                    <span v-if="data.description">{{ data.description }}</span>
-                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
-                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
-                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
-                  </div>
+                    <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
+                      {{ formatTaskMetaSummary(data) }}
+                    </div>
                 </div>
 
                 <div class="task-node-actions">
-                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
-                  <el-button link type="success" @click.stop="toggleComplete(data)">
-                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '撤回' : '完成' }}
                   </el-button>
-                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data)">细分</el-button>
+                  <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
                     {{ data.active ? '停用' : '启用' }}
                   </el-button>
-                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
                 </div>
               </div>
             </template>
@@ -172,42 +168,43 @@
             :data="currentTodoFutureTree"
             node-key="taskId"
             :props="treeProps"
-            default-expand-all
             :expand-on-click-node="false"
           >
             <template #default="{ data }">
               <div class="task-node">
-                <div class="task-node-main">
+                <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
+                      <Clock />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(data.type) === '2'">
+                      <Calendar />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-note" v-else>
+                      <Document />
+                    </el-icon>
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
-                    <el-tag size="small" :type="taskTypeTagType(data.type)">
-                      {{ taskTypeLabel(data.type) }}
-                    </el-tag>
-                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
-                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
-                    </el-tag>
-                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
-                      + 子任务
-                    </el-button>
+                    
                   </div>
 
-                  <div class="task-node-meta">
-                    <span v-if="data.description">{{ data.description }}</span>
-                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
-                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
-                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
-                  </div>
+                    <div v-if="formatTaskMetaSummary(data)" class="task-node-meta">
+                      {{ formatTaskMetaSummary(data) }}
+                    </div>
                 </div>
 
                 <div class="task-node-actions">
-                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
-                  <el-button link type="success" @click.stop="toggleComplete(data)">
-                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '撤回' : '完成' }}
                   </el-button>
-                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data)">细分</el-button>
+                  <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
                     {{ data.active ? '停用' : '启用' }}
                   </el-button>
-                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
                 </div>
               </div>
             </template>
@@ -233,42 +230,42 @@
             :data="sceneTaskTree"
             node-key="taskId"
             :props="treeProps"
-            default-expand-all
             :expand-on-click-node="false"
           >
             <template #default="{ data }">
               <div class="task-node">
-                <div class="task-node-main">
+                <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
+                      <Clock />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(data.type) === '2'">
+                      <Calendar />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-note" v-else>
+                      <Document />
+                    </el-icon>
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
-                    <el-tag size="small" :type="taskTypeTagType(data.type)">
-                      {{ taskTypeLabel(data.type) }}
-                    </el-tag>
-                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
-                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
-                    </el-tag>
-                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data, false)">
-                      + 子任务
-                    </el-button>
+                    <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data, false)">细分</el-button>
                   </div>
 
-                  <div class="task-node-meta">
-                    <span v-if="data.description">{{ data.description }}</span>
-                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
-                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
-                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
+                    {{ formatTaskMetaSummary(data) }}
                   </div>
                 </div>
 
                 <div class="task-node-actions">
-                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
-                  <el-button link type="success" @click.stop="toggleComplete(data)">
-                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '撤回' : '完成' }}
                   </el-button>
-                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                  <el-button size="small" :type="data.active ? 'warning' : 'primary'" @click.stop="toggleActive(data)">
                     {{ data.active ? '停用' : '启用' }}
                   </el-button>
-                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
                 </div>
               </div>
             </template>
@@ -292,42 +289,43 @@
             :data="nonSceneTaskTree"
             node-key="taskId"
             :props="treeProps"
-            default-expand-all
             :expand-on-click-node="false"
           >
             <template #default="{ data }">
               <div class="task-node">
-                <div class="task-node-main">
+                <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
+                      <Clock />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(data.type) === '2'">
+                      <Calendar />
+                    </el-icon>
+                    <el-icon class="task-type-icon task-type-icon-note" v-else>
+                      <Document />
+                    </el-icon>
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
-                    <el-tag size="small" :type="taskTypeTagType(data.type)">
-                      {{ taskTypeLabel(data.type) }}
-                    </el-tag>
-                    <el-tag size="small" :type="data.isCompleted ? 'success' : data.active ? 'warning' : 'info'">
-                      {{ data.isCompleted ? '已完成' : data.active ? '激活中' : '未激活' }}
-                    </el-tag>
-                    <el-button link type="primary" class="task-inline-action" @click.stop="openCreateTaskDialog(data)">
-                      + 子任务
-                    </el-button>
+                    
                   </div>
 
-                  <div class="task-node-meta">
-                    <span v-if="data.description">{{ data.description }}</span>
-                    <span v-if="data.startTime">开始 {{ formatDateTime(data.startTime) }}</span>
-                    <span v-if="data.endTime">结束 {{ formatDateTime(data.endTime) }}</span>
-                    <span v-if="data.targetDuration">目标 {{ formatDuration(data.targetDuration) }}</span>
+                  <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
+                    {{ formatTaskMetaSummary(data) }}
                   </div>
                 </div>
 
                 <div class="task-node-actions">
-                  <el-button link type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
-                  <el-button link type="success" @click.stop="toggleComplete(data)">
-                    {{ data.isCompleted ? '取消完成' : '标记完成' }}
+                  <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
+                    {{ data.isCompleted ? '撤回' : '完成' }}
                   </el-button>
-                  <el-button link type="warning" @click.stop="toggleActive(data)">
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data)">细分</el-button>
+                  <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
                     {{ data.active ? '停用' : '启用' }}
                   </el-button>
-                  <el-button link type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
                 </div>
               </div>
             </template>
@@ -447,25 +445,32 @@
         v-model="taskDialogVisible"
         :title="taskDialogTitle"
         width="620px"
-        class="task-dialog"
+        :class="['task-dialog', { 'view-mode': taskDialogMode === 'view' }]"
         destroy-on-close
         append-to-body
         @closed="resetTaskDialog"
       >
-        <el-steps v-if="!isSceneDialog" :active="taskDialogStep" finish-status="success" align-center class="task-dialog-steps">
+        <el-steps v-if="taskDialogMode !== 'view' && !isSceneDialog" :active="taskDialogStep" finish-status="success" align-center class="task-dialog-steps">
           <el-step title="基本信息" />
           <el-step title="时间信息" />
         </el-steps>
 
-        <div v-if="taskDialogParent" class="task-dialog-parent-chip">
+        <div v-if="taskDialogMode !== 'view' && taskDialogParent" class="task-dialog-parent-chip">
+          <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(taskDialogParent.type) === '1'">
+            <Clock />
+          </el-icon>
+          <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(taskDialogParent.type) === '2'">
+            <Calendar />
+          </el-icon>
+          <el-icon class="task-type-icon task-type-icon-note" v-else>
+            <Document />
+          </el-icon>
           <span>父任务</span>
           <strong>{{ taskDialogParent.title }}</strong>
-          <el-tag size="small" :type="taskTypeTagType(taskDialogParent.type)">
-            {{ taskTypeLabel(taskDialogParent.type) }}
-          </el-tag>
         </div>
 
         <el-alert
+          v-if="taskDialogMode !== 'view'"
           v-for="warning in taskDialogWarnings"
           :key="warning"
           :title="warning"
@@ -475,7 +480,93 @@
           class="task-dialog-alert"
         />
 
+        <!-- Read-only view mode -->
+        <div v-if="taskDialogMode === 'view'" class="task-dialog-page read-only-view">
+          <div class="detail-block">
+            <div class="detail-block-label">描述</div>
+            <div class="detail-text">{{ taskForm.description || '无' }}</div>
+          </div>
+
+          <template v-if="String(taskForm.type) === '2'">
+            <div class="detail-block">
+              <div class="detail-block-label">截止日期</div>
+              <div>{{ taskForm.endTime ? formatDateTime(taskForm.endTime) : '-' }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">计划用时</div>
+              <div>{{ formatPlannedDuration(taskForm.targetDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">开始时间</div>
+              <div>{{ taskForm.startTime ? formatDateTime(taskForm.startTime) : '-' }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">结算模式</div>
+              <div>{{ settlementTypeOptions.find(o => o.value === taskForm.settlementType)?.label || '-' }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">创建时间</div>
+              <div>{{ taskForm.createTime ? formatDateTime(taskForm.createTime) : '-' }}</div>
+            </div>
+          </template>
+
+          <template v-else-if="isRecurringTask">
+            <div class="detail-block">
+              <div class="detail-block-label">循环周期</div>
+              <div>{{ formatRecurrence(taskForm.cycleMode as RecurrenceMode, taskForm.cycleIntervalDays, taskForm.cycleWeekdays, taskForm.cycleMonthDays) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">计划用时</div>
+              <div>{{ formatPlannedDuration(taskForm.targetDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">起止时间</div>
+              <div>
+                <div>开始时间: {{ formatTimeOnly(taskForm.startTime) }}</div>
+                <div>结束时间: {{ formatTimeOnly(taskForm.endTime) }}</div>
+              </div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">结算模式</div>
+              <div>{{ settlementTypeOptions.find(o => o.value === taskForm.settlementType)?.label || '-' }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">创建时间</div>
+              <div>{{ taskForm.createTime ? formatDateTime(taskForm.createTime) : '-' }}</div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="detail-block">
+              <div class="detail-block-label">计划用时</div>
+              <div>{{ formatPlannedDuration(taskForm.targetDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">时间信息</div>
+              <div>
+                <div>开始时间: {{ taskForm.startTime ? formatDateTime(taskForm.startTime) : '-' }}</div>
+                <div>结束时间: {{ taskForm.endTime ? formatDateTime(taskForm.endTime) : '-' }}</div>
+              </div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">创建时间</div>
+              <div>{{ taskForm.createTime ? formatDateTime(taskForm.createTime) : '-' }}</div>
+            </div>
+          </template>
+        </div>
+
         <el-form
+          v-if="taskDialogMode !== 'view'"
           ref="taskFormRef"
           :model="taskForm"
           :rules="taskFormRules"
@@ -737,14 +828,19 @@
 
         <template #footer>
           <div class="task-dialog-footer">
-            <el-button @click="taskDialogVisible = false">取消</el-button>
-            <template v-if="isSceneDialog">
-              <el-button type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+            <el-button @click="taskDialogVisible = false">关闭</el-button>
+            <template v-if="taskDialogMode === 'view'">
+              <!-- only close -->
             </template>
             <template v-else>
-              <el-button v-if="taskDialogStep > 0" @click="taskDialogStep -= 1">上一步</el-button>
-              <el-button v-if="taskDialogStep === 0" type="warning" @click="goTaskDialogNext">下一步</el-button>
-              <el-button v-else type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+              <template v-if="isSceneDialog">
+                <el-button type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+              </template>
+              <template v-else>
+                <el-button v-if="taskDialogStep > 0" @click="taskDialogStep -= 1">上一步</el-button>
+                <el-button v-if="taskDialogStep === 0" type="warning" @click="goTaskDialogNext">下一步</el-button>
+                <el-button v-else type="warning" :loading="taskDialogLoading" @click="submitTaskDialog">保存</el-button>
+              </template>
             </template>
           </div>
         </template>
@@ -758,6 +854,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
+import { Calendar, Clock, Document, Plus } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import {
   createTaskApi,
@@ -790,13 +887,24 @@ interface CycleFieldValues {
   cycleMonthDays: number[];
 }
 
+interface RecurringTaskDraft extends CycleFieldValues {
+  cycleMode: RecurrenceMode;
+  planDurationHours: number;
+  planDurationMinutes: number;
+  settlementType: number;
+  startTime: string;
+  endTime: string;
+}
+
 interface TaskDialogForm {
   taskId: number | null;
   parentId: number | null;
   title: string;
   description: string;
+  createTime: string;
   type: number;
   settlementType: number;
+  targetDuration: number;
   planDurationHours: number;
   planDurationMinutes: number;
   startTime: string;
@@ -818,7 +926,7 @@ const loadingTasks = ref(false);
 const savingReview = ref(false);
 const taskDialogVisible = ref(false);
 const taskDialogStep = ref(0);
-const taskDialogMode = ref<'create' | 'edit'>('create');
+const taskDialogMode = ref<'create' | 'edit' | 'view'>('create');
 const taskDialogLoading = ref(false);
 const taskDialogParent = ref<TaskItem | null>(null);
 const taskFormRef = ref<FormInstance>();
@@ -826,6 +934,7 @@ const allTasks = ref<TaskItem[]>([]);
 const reviewHistory = ref<ReviewItem[]>([]);
 const selectedReviewId = ref<number | null>(null);
 const reviewDraft = ref('');
+const recurringTaskDraft = ref<RecurringTaskDraft | null>(null);
 
 const taskTypeOptions: Array<{ label: string; value: number }> = [
   { label: '随手记', value: 0 },
@@ -1043,21 +1152,25 @@ const createDefaultTaskForm = (
     return normalizedType === 1 ? getTimePart(value) : formatDateTimeForPicker(value);
   };
 
-  const defaultStartTime = normalizedType === 1
-    ? (sourceTask?.startTime ? resolveDefaultDateTime(sourceTask.startTime) : parentTask?.startTime ? resolveDefaultDateTime(parentTask.startTime) : '')
-    : (sourceTask?.startTime ? resolveDefaultDateTime(sourceTask.startTime) : parentTask?.startTime ? resolveDefaultDateTime(parentTask.startTime) : '');
+  // 创建子任务时默认继承父任务的起止时间；编辑/复制（存在 sourceTask）时使用 sourceTask 的时间
+  // 如果用户手动清空起止时间，表单会保留空值
+  const defaultStartTime = sourceTask?.startTime
+    ? resolveDefaultDateTime(sourceTask.startTime)
+    : (parentTask ? (parentTask.startTime ? resolveDefaultDateTime(parentTask.startTime) : '') : '');
 
-  const defaultEndTime = normalizedType === 1
-    ? (sourceTask?.endTime ? resolveDefaultDateTime(sourceTask.endTime) : parentTask?.endTime ? resolveDefaultDateTime(parentTask.endTime) : '')
-    : (sourceTask?.endTime ? resolveDefaultDateTime(sourceTask.endTime) : parentTask?.endTime ? resolveDefaultDateTime(parentTask.endTime) : '');
+  const defaultEndTime = sourceTask?.endTime
+    ? resolveDefaultDateTime(sourceTask.endTime)
+    : (parentTask ? (parentTask.endTime ? resolveDefaultDateTime(parentTask.endTime) : '') : '');
 
   const form: TaskDialogForm = {
     taskId: sourceTask?.taskId ?? null,
     parentId: sourceTask ? (sourceTask.parentId ?? null) : (parentTask?.taskId ?? null),
     title: sourceTask?.title ?? '',
     description: sourceTask?.description ?? '',
+    createTime: sourceTask?.createTime ?? '',
     type: normalizedType,
     settlementType: Number.isFinite(sourceSettlement) ? sourceSettlement : 0,
+    targetDuration: sourceTask?.targetDuration ?? parentTask?.targetDuration ?? 0,
     planDurationHours: Math.floor(totalMinutes / 60),
     planDurationMinutes: totalMinutes % 60,
     startTime: defaultStartTime,
@@ -1066,7 +1179,7 @@ const createDefaultTaskForm = (
     cycleIntervalDays: parsedCron?.cycleIntervalDays ?? 1,
     cycleWeekdays: parsedCron?.cycleWeekdays ?? [],
     cycleMonthDays: parsedCron?.cycleMonthDays ?? [],
-    inheritParentTime: sourceTask?.inheritParentTime ?? false,
+    inheritParentTime: sourceTask?.inheritParentTime ?? (parentTask ? true : false),
     active: sourceTask?.active ?? defaultActive,
     isCompleted: sourceTask?.isCompleted ?? false,
   };
@@ -1074,11 +1187,36 @@ const createDefaultTaskForm = (
   return form;
 };
 
+const snapshotRecurringDraft = (): RecurringTaskDraft => ({
+  cycleMode: taskForm.cycleMode,
+  cycleIntervalDays: taskForm.cycleIntervalDays,
+  cycleWeekdays: [...taskForm.cycleWeekdays],
+  cycleMonthDays: [...taskForm.cycleMonthDays],
+  planDurationHours: taskForm.planDurationHours,
+  planDurationMinutes: taskForm.planDurationMinutes,
+  settlementType: taskForm.settlementType,
+  startTime: taskForm.startTime,
+  endTime: taskForm.endTime,
+});
+
+const restoreRecurringDraft = (draft: RecurringTaskDraft) => {
+  taskForm.cycleMode = draft.cycleMode;
+  taskForm.cycleIntervalDays = draft.cycleIntervalDays;
+  taskForm.cycleWeekdays = [...draft.cycleWeekdays];
+  taskForm.cycleMonthDays = [...draft.cycleMonthDays];
+  taskForm.planDurationHours = draft.planDurationHours;
+  taskForm.planDurationMinutes = draft.planDurationMinutes;
+  taskForm.settlementType = draft.settlementType;
+  taskForm.startTime = draft.startTime;
+  taskForm.endTime = draft.endTime;
+};
+
 const taskForm = reactive<TaskDialogForm>(createDefaultTaskForm());
 
 const displayUsername = computed(() => authStore.username || '未命名用户');
 const isRecurringTask = computed(() => String(taskForm.type) === '1');
 const taskDialogTitle = computed(() => {
+  if (taskDialogMode.value === 'view') return taskForm.title || '任务详情';
   if (taskDialogMode.value === 'edit') return '编辑任务';
   if (taskForm.type === 3) return '新建场景';
   return taskDialogParent.value ? '新建子任务' : '新建任务';
@@ -1174,7 +1312,11 @@ const taskFormRules = computed<FormRules>(() => {
 
 watch(
   () => taskForm.type,
-  (type) => {
+  (type, previousType) => {
+    if (String(previousType) === '1' && String(type) !== '1') {
+      recurringTaskDraft.value = snapshotRecurringDraft();
+    }
+
     if (String(type) === '0') {
       taskForm.settlementType = 0;
     }
@@ -1184,6 +1326,11 @@ watch(
       taskForm.cycleIntervalDays = 1;
       taskForm.cycleWeekdays = [];
       taskForm.cycleMonthDays = [];
+      return;
+    }
+
+    if (String(previousType) !== '1' && recurringTaskDraft.value) {
+      restoreRecurringDraft(recurringTaskDraft.value);
     }
   },
 );
@@ -1200,11 +1347,11 @@ const sectionMeta = {
   review: { label: '回顾', badge: 'DAILY REVIEW', description: '今日总结草稿 + 历史 review 详情。' },
 } as const;
 
-const todayKey = computed(() => formatDateKey(new Date()));
+const todayKey = computed(() => formatBusinessDateKey(new Date()));
 const draftStorageKey = computed(() => `mychecklist-review-draft-${todayKey.value}`);
 
 const todayLabel = computed(() => {
-  const date = new Date();
+  const date = getBusinessDayDate(new Date());
   return date.toLocaleDateString('zh-CN', {
     year: 'numeric',
     month: 'long',
@@ -1254,6 +1401,7 @@ const resetTaskDialog = () => {
   taskDialogMode.value = 'create';
   taskDialogParent.value = null;
   taskDialogLoading.value = false;
+  recurringTaskDraft.value = null;
   taskFormRef.value?.clearValidate();
 };
 
@@ -1266,6 +1414,7 @@ const openCreateTaskDialog = (parentTask?: TaskItem | null, defaultActive = true
   taskDialogMode.value = 'create';
   taskDialogParent.value = parentTask ?? null;
   Object.assign(taskForm, createDefaultTaskForm(parentTask ?? null, null, undefined, defaultActive));
+  recurringTaskDraft.value = String(taskForm.type) === '1' ? snapshotRecurringDraft() : null;
   taskDialogStep.value = 0;
   taskDialogVisible.value = true;
 };
@@ -1274,6 +1423,7 @@ const openCreateSceneDialog = () => {
   taskDialogMode.value = 'create';
   taskDialogParent.value = null;
   Object.assign(taskForm, createDefaultTaskForm(null, null, 3, true));
+  recurringTaskDraft.value = null;
   taskDialogStep.value = 0;
   taskDialogVisible.value = true;
 };
@@ -1282,6 +1432,16 @@ const openEditTaskDialog = (task: TaskItem) => {
   taskDialogMode.value = 'edit';
   taskDialogParent.value = findTaskById(task.parentId);
   Object.assign(taskForm, createDefaultTaskForm(taskDialogParent.value, task));
+  recurringTaskDraft.value = String(taskForm.type) === '1' ? snapshotRecurringDraft() : null;
+  taskDialogStep.value = 0;
+  taskDialogVisible.value = true;
+};
+
+const openViewTaskDialog = (task: TaskItem) => {
+  taskDialogMode.value = 'view';
+  taskDialogParent.value = findTaskById(task.parentId);
+  Object.assign(taskForm, createDefaultTaskForm(taskDialogParent.value, task));
+  recurringTaskDraft.value = String(taskForm.type) === '1' ? snapshotRecurringDraft() : null;
   taskDialogStep.value = 0;
   taskDialogVisible.value = true;
 };
@@ -1324,28 +1484,28 @@ const buildCronConfig = () => {
 const buildTaskPayload = () => {
   const totalDurationSeconds = Math.max(0, (Number(taskForm.planDurationHours || 0) * 3600) + (Number(taskForm.planDurationMinutes || 0) * 60));
   const normalizeDateTimeForApi = (value?: string) => {
-    if (!value) return undefined;
+    if (!value) return null;
     return value.includes('T') ? value : value.replace(' ', 'T');
   };
   const normalizeRecurringDateTimeForApi = (value?: string) => {
-    if (!value) return undefined;
+    if (!value) return null;
     if (value.includes('T')) return value;
     if (value.includes(' ')) return value.replace(' ', 'T');
     return `${getTodayDatePart()}T${value.length === 5 ? `${value}:00` : value}`;
   };
 
   const payload: Record<string, unknown> = {
-    taskId: taskForm.taskId ?? undefined,
-    parentId: taskForm.parentId ?? undefined,
+    taskId: taskForm.taskId ?? null,
+    parentId: taskForm.parentId ?? null,
     title: taskForm.title.trim(),
-    description: taskForm.description.trim() || undefined,
+    description: taskForm.description.trim() || null,
     type: String(taskForm.type),
     settlementType: String(taskForm.settlementType),
     targetDuration: totalDurationSeconds,
     startTime: String(taskForm.type) === '1' ? normalizeRecurringDateTimeForApi(taskForm.startTime) : normalizeDateTimeForApi(taskForm.startTime),
     endTime: String(taskForm.type) === '1' ? normalizeRecurringDateTimeForApi(taskForm.endTime) : normalizeDateTimeForApi(taskForm.endTime),
-    cronConfig: buildCronConfig(),
-    inheritParentTime: taskDialogParent.value ? taskForm.inheritParentTime : undefined,
+    cronConfig: buildCronConfig() ?? null,
+    inheritParentTime: taskDialogParent.value ? taskForm.inheritParentTime : null,
     active: taskForm.active,
     isCompleted: taskForm.isCompleted,
   };
@@ -1359,6 +1519,24 @@ const submitTaskDialog = async () => {
   try {
     await taskFormRef.value.validate();
   } catch {
+    return;
+  }
+  // 验证：如果同时填写了起止时间，确保结束时间不早于开始时间
+  const parseForCompare = (value?: string, isRecurring = false) => {
+    if (!value) return null;
+    if (value.includes('T')) return new Date(value.replace(' ', 'T'));
+    if (value.includes(' ')) return new Date(value.replace(' ', 'T'));
+    if (isRecurring) {
+      const time = value.length === 5 ? `${value}:00` : value;
+      return new Date(`${getTodayDatePart()}T${time}`);
+    }
+    return new Date(value);
+  };
+
+  const start = parseForCompare(taskForm.startTime, String(taskForm.type) === '1');
+  const end = parseForCompare(taskForm.endTime, String(taskForm.type) === '1');
+  if (start && end && end.getTime() < start.getTime()) {
+    ElMessage.error('结束时间不能早于开始时间，请检查起止时间');
     return;
   }
 
@@ -1465,7 +1643,7 @@ const toggleComplete = async (task: TreeTask) => {
   await loadTasks();
 };
 
-const taskTypeLabel = (type?: string) => {
+const taskTypeLabel = (type?: string | number) => {
   switch (String(type)) {
     case '0':
       return '随手记';
@@ -1480,7 +1658,7 @@ const taskTypeLabel = (type?: string) => {
   }
 };
 
-const taskTypeTagType = (type?: string) => {
+const taskTypeTagType = (type?: string | number) => {
   switch (String(type)) {
     case '3':
       return 'warning';
@@ -1549,7 +1727,12 @@ function updateTimePart(field: 'startTime' | 'endTime', timeValue?: string) {
   }
 
   if (String(taskForm.type) === '1') {
-    taskForm[field] = combineDateWithTime(timeValue);
+    const currentDate = getDatePart(taskForm[field]);
+    if (!currentDate) {
+      taskForm[field] = `${getTodayDatePart()} ${timeValue}`;
+      return;
+    }
+    taskForm[field] = `${currentDate} ${timeValue}`;
     return;
   }
 
@@ -1612,12 +1795,66 @@ const formatDateTime = (value?: string) => {
   });
 };
 
+const formatTimeOnly = (value?: string) => {
+  const timePart = getTimePart(value);
+  if (!timePart) return '-';
+  return timePart.slice(0, 5);
+};
+
+const truncateText = (value?: string, maxLength = 18) => {
+  if (!value) return '';
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(1, maxLength - 1))}...`;
+};
+
+const formatTaskMetaSummary = (task: Pick<TaskItem, 'description'>) => {
+  return truncateText(task.description, 36) || '暂无描述';
+};
+
+const formatPlannedDuration = (seconds?: number) => {
+  if (!seconds || seconds <= 0) return '-';
+  return formatDuration(seconds);
+};
+
+const formatTaskTimeInfo = (startTime?: string, endTime?: string) => {
+  const parts: string[] = [];
+  if (startTime) parts.push(`开始 ${formatDateTime(startTime)}`);
+  if (endTime) parts.push(`结束 ${formatDateTime(endTime)}`);
+  return parts.length ? parts.join('；') : '-';
+};
+
+const formatRecurrence = (mode: RecurrenceMode, intervalDays?: number, weekdays?: number[], monthDays?: number[]) => {
+  if (mode === 'interval') {
+    const n = Math.max(1, Number(intervalDays || 1));
+    return `[间隔] 每${n}天`;
+  }
+
+  if (mode === 'weekly') {
+    const names = normalizeNumberList(weekdays || []).map((d) => weekdayOptions.find(o => o.value === d)?.label).filter(Boolean);
+    return names.length ? `[每周] ${names.join('、')}` : '[每周]';
+  }
+
+  // monthly: 输出为数字列表，前置标签为 [每月]
+  const days = normalizeNumberList(monthDays || []);
+  if (!days.length) return '[每月]';
+  if (days.length === 1) return `[每月] ${days[0]}`;
+  return `[每月] ${days.join('、')}`;
+};
+
 const formatDateKey = (value: string | Date) => {
   const date = typeof value === 'string' ? new Date(value) : value;
   const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
   return `${year}-${month}-${day}`;
+};
+
+const getBusinessDayDate = (value: Date) => new Date(value.getTime() - 4 * 60 * 60 * 1000);
+
+const formatBusinessDateKey = (value: string | Date) => {
+  const date = typeof value === 'string' ? new Date(value) : value;
+  return formatDateKey(getBusinessDayDate(date));
 };
 
 const startOfToday = () => {
@@ -1635,21 +1872,24 @@ const isScene = (task: TaskItem) => String(task.type) === '3';
 const isTodayTask = (task: TaskItem) => {
   if (isScene(task)) return false;
   if (!Boolean(task.active) || !task.endTime) return false;
-  return formatDateKey(task.endTime) === todayKey.value;
+  return formatBusinessDateKey(task.endTime) === todayKey.value;
 };
 
-const isTodoTask = (task: TaskItem) => Boolean(task.active) && !Boolean(task.isCompleted);
+const isTodoTask = (task: TaskItem) => {
+  if (isScene(task)) return false;
+  return Boolean(task.active) && !Boolean(task.isCompleted);
+};
 
 const isTodoTodayTask = (task: TaskItem) => {
   if (!isTodoTask(task)) return false;
   if (!task.endTime) return false;
-  return formatDateKey(task.endTime) === todayKey.value;
+  return formatBusinessDateKey(task.endTime) === todayKey.value;
 };
 
 const isTodoFutureTask = (task: TaskItem) => {
   if (!isTodoTask(task)) return false;
   if (!task.endTime) return true;
-  return formatDateKey(task.endTime) !== todayKey.value;
+  return formatBusinessDateKey(task.endTime) !== todayKey.value;
 };
 
 const buildTree = (tasks: TaskItem[]) => {
@@ -2016,37 +2256,213 @@ onBeforeUnmount(() => {
 
 .task-tree {
   background: transparent;
+  overflow-x: hidden;
+}
+
+.task-tree :deep(.el-tree-node__content) {
+  height: auto;
+  padding: 4px 0;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.task-tree :deep(.el-tree-node__content:hover) {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.task-tree :deep(.el-tree-node__children) {
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(194, 199, 208, 0.7);
 }
 
 .task-node {
   width: 100%;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 10px;
+  margin: 2px 0;
+  border: 1px solid rgba(194, 199, 208, 0.58);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 3px 10px rgba(31, 35, 41, 0.028);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .task-node-main {
+  width: 100%;
   min-width: 0;
   flex: 1;
 }
 
 .task-node-title-row {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.task-type-icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.task-type-icon-recurring {
+  color: #2f80ed;
+}
+
+.task-type-icon-ddl {
+  color: #0b3d91;
+}
+
+.task-type-icon-note {
+  color: #6b7280;
 }
 
 .task-node-title {
+  flex: 1 1 0;
   font-weight: 700;
   color: #1f2329;
+  font-size: 14px;
+}
+
+.btn-enable {
+  background-color: #fff9c4; /* pale yellow */
+  color: #7a5a00;
+  border: 1px solid #f3eaa8;
+}
+
+.btn-disable {
+  background-color: #f3f4f6; /* light gray */
+  color: #6b6b6b;
+  border: 1px solid #e5e7eb;
+}
+
+.btn-subdivide {
+  background-color: #e6f4ff; /* light blue */
+  color: #0b61a6;
+  border: 1px solid #cfe9ff;
+}
+
+.btn-revoke {
+  background-color: #f3e8ff; /* pale lavender */
+  color: #5b21b6;
+  border: 1px solid #e6d6ff;
+}
+
+.btn-complete {
+  background-color: #d1fae5; /* light green */
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+/* 交互样式：复制 Element Plus `success` 按钮的过渡/阴影/按下反馈，保留各自配色 */
+.btn-enable, .btn-disable, .btn-subdivide, .btn-revoke, .btn-complete {
+  padding: 4px 8px; /* smaller */
+  border-radius: 6px;
+  font-size: 12px; /* slightly smaller */
+  cursor: pointer;
+  transition: box-shadow 0.12s ease, filter 0.12s ease;
+  box-shadow: none;
+}
+
+.btn-enable:hover, .btn-disable:hover, .btn-subdivide:hover, .btn-revoke:hover, .btn-complete:hover {
+  filter: brightness(0.97);
+  box-shadow: 0 6px 16px rgba(16,24,40,0.08);
+}
+
+.btn-enable:active, .btn-disable:active, .btn-subdivide:active, .btn-revoke:active, .btn-complete:active {
+  box-shadow: 0 3px 8px rgba(16,24,40,0.06);
+}
+
+/* Ensure Element Plus buttons inside action area also use compact spacing */
+.task-node-actions .el-button {
+  padding: 4px 8px !important;
+  font-size: 12px !important;
+  height: auto !important;
+  min-width: 0 !important;
+}
+
+.task-active-toggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.active-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #e6e7ea;
+  border: 1px solid rgba(0,0,0,0.06);
+}
+
+.dot-completed {
+  background: #34d399; /* green */
+  box-shadow: 0 0 0 4px rgba(52,211,153,0.08);
+}
+
+.dot-pending {
+  background: #f59e0b; /* orange */
+  box-shadow: 0 0 0 4px rgba(245,158,11,0.06);
+}
+
+.dot-inactive {
+  background: #e6e7ea; /* gray */
+  border-color: #d1d5db;
+}
+
+.task-node-main {
+  cursor: pointer;
+}
+
+.task-node-title {
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-tree :deep(.el-tree-node__children .task-node) {
+  background: rgba(249, 250, 252, 0.96);
+  border-color: rgba(194, 199, 208, 0.42);
+  box-shadow: none;
+}
+
+.task-tree :deep(.el-tree-node__children .task-node-main) {
+  opacity: 0.98;
+}
+
+.task-node-meta {
+  width: 100%;
+  display: block;
+  color: #8a92a2;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .task-inline-action {
   padding: 0;
   font-size: 12px;
+}
+
+.task-node-meta-inline {
+  padding-top: 0;
 }
 
 .task-dialog-section-title {
@@ -2089,20 +2505,15 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
-.task-node-meta {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  color: #8a92a2;
-  margin-top: 8px;
-  font-size: 12px;
-}
-
 .task-node-actions {
+  width: 100%;
   display: flex;
-  gap: 4px;
+  gap: 2px; /* reduced spacing */
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  padding-top: 4px; /* slightly smaller */
+  border-top: none;
+  min-width: 0;
 }
 
 .review-layout {
@@ -2214,11 +2625,43 @@ onBeforeUnmount(() => {
 }
 
 .detail-block-label {
-  color: #8f6b00;
-  font-size: 12px;
+  color: #1f2329;
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.read-only-view {
+  gap: 100em;
+}
+
+.read-only-view .detail-block {
+  gap: 0em;
+}
+
+.read-only-view .detail-block > div:last-child {
+  color: #1f2329;
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.read-only-view .detail-block-label {
+  color: #1f2329;
+  line-height: 1.5;
+}
+
+/* Bold dialog title in view mode */
+.task-dialog.view-mode :deep(.el-dialog__title) {
+  font-weight: 800 !important;
+  color: #1f2329 !important;
+  font-size: 18px !important;
+}
+
+.task-dialog.view-mode :deep(.el-dialog__header) {
+  /* slightly larger title */
+  font-size: 18px !important;
 }
 
 .detail-pre {
@@ -2230,6 +2673,26 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.7;
+}
+
+/* Minimal text container that preserves newlines only (no background/padding) */
+.detail-text {
+  margin: 0;
+  color: #394150;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+}
+
+/* Strong override and ensure read-only spacing takes effect despite other rules */
+.task-dialog-page.read-only-view {
+  gap: 1.2em !important;
+}
+.task-dialog-page.read-only-view .detail-block {
+  gap: 0em !important;
+}
+.read-only-view strong {
+  font-weight: 400 !important;
 }
 
 .detail-footer {

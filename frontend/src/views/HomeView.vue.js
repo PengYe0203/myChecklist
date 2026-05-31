@@ -872,6 +872,18 @@ let __VLS_directives;
 /** @type {__VLS_StyleScopedClasses['panel-head']} */ ;
 /** @type {__VLS_StyleScopedClasses['panel-head']} */ ;
 /** @type {__VLS_StyleScopedClasses['panel-head-actions']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['el-tree-node__content']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['el-tree-node__content']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['el-tree-node__content']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
+/** @type {__VLS_StyleScopedClasses['el-tree-node']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-node']} */ ;
 /** @type {__VLS_StyleScopedClasses['review-item']} */ ;
 /** @type {__VLS_StyleScopedClasses['active']} */ ;
 /** @type {__VLS_StyleScopedClasses['review-item']} */ ;
@@ -1161,13 +1173,13 @@ if (__VLS_ctx.activeSection === 'today') {
             // @ts-ignore
             const __VLS_49 = __VLS_asFunctionalComponent(__VLS_48, new __VLS_48({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }));
             const __VLS_50 = __VLS_49({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }, ...__VLS_functionalComponentArgsRest(__VLS_49));
             let __VLS_52;
             let __VLS_53;
@@ -1178,23 +1190,24 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleComplete(data);
                 }
             };
             __VLS_51.slots.default;
+            (data.isCompleted ? '取消完成' : '完成');
             var __VLS_51;
             const __VLS_56 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_57 = __VLS_asFunctionalComponent(__VLS_56, new __VLS_56({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }));
             const __VLS_58 = __VLS_57({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_57));
             let __VLS_60;
             let __VLS_61;
@@ -1205,23 +1218,24 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_59.slots.default;
-            (data.isCompleted ? '取消完成' : '标记完成');
             var __VLS_59;
             const __VLS_64 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_65 = __VLS_asFunctionalComponent(__VLS_64, new __VLS_64({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }));
             const __VLS_66 = __VLS_65({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }, ...__VLS_functionalComponentArgsRest(__VLS_65));
             let __VLS_68;
@@ -1244,12 +1258,12 @@ if (__VLS_ctx.activeSection === 'today') {
             // @ts-ignore
             const __VLS_73 = __VLS_asFunctionalComponent(__VLS_72, new __VLS_72({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }));
             const __VLS_74 = __VLS_73({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_73));
             let __VLS_76;
@@ -1466,13 +1480,13 @@ if (__VLS_ctx.activeSection === 'todo') {
             // @ts-ignore
             const __VLS_121 = __VLS_asFunctionalComponent(__VLS_120, new __VLS_120({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }));
             const __VLS_122 = __VLS_121({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }, ...__VLS_functionalComponentArgsRest(__VLS_121));
             let __VLS_124;
             let __VLS_125;
@@ -1483,23 +1497,24 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleComplete(data);
                 }
             };
             __VLS_123.slots.default;
+            (data.isCompleted ? '取消完成' : '完成');
             var __VLS_123;
             const __VLS_128 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_129 = __VLS_asFunctionalComponent(__VLS_128, new __VLS_128({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }));
             const __VLS_130 = __VLS_129({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_129));
             let __VLS_132;
             let __VLS_133;
@@ -1510,23 +1525,24 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_131.slots.default;
-            (data.isCompleted ? '取消完成' : '标记完成');
             var __VLS_131;
             const __VLS_136 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_137 = __VLS_asFunctionalComponent(__VLS_136, new __VLS_136({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }));
             const __VLS_138 = __VLS_137({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }, ...__VLS_functionalComponentArgsRest(__VLS_137));
             let __VLS_140;
@@ -1549,12 +1565,12 @@ if (__VLS_ctx.activeSection === 'todo') {
             // @ts-ignore
             const __VLS_145 = __VLS_asFunctionalComponent(__VLS_144, new __VLS_144({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }));
             const __VLS_146 = __VLS_145({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_145));
             let __VLS_148;
@@ -1715,13 +1731,13 @@ if (__VLS_ctx.activeSection === 'todo') {
             // @ts-ignore
             const __VLS_177 = __VLS_asFunctionalComponent(__VLS_176, new __VLS_176({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }));
             const __VLS_178 = __VLS_177({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }, ...__VLS_functionalComponentArgsRest(__VLS_177));
             let __VLS_180;
             let __VLS_181;
@@ -1732,23 +1748,24 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleComplete(data);
                 }
             };
             __VLS_179.slots.default;
+            (data.isCompleted ? '取消完成' : '完成');
             var __VLS_179;
             const __VLS_184 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_185 = __VLS_asFunctionalComponent(__VLS_184, new __VLS_184({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }));
             const __VLS_186 = __VLS_185({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_185));
             let __VLS_188;
             let __VLS_189;
@@ -1759,23 +1776,24 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_187.slots.default;
-            (data.isCompleted ? '取消完成' : '标记完成');
             var __VLS_187;
             const __VLS_192 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_193 = __VLS_asFunctionalComponent(__VLS_192, new __VLS_192({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }));
             const __VLS_194 = __VLS_193({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }, ...__VLS_functionalComponentArgsRest(__VLS_193));
             let __VLS_196;
@@ -1798,12 +1816,12 @@ if (__VLS_ctx.activeSection === 'todo') {
             // @ts-ignore
             const __VLS_201 = __VLS_asFunctionalComponent(__VLS_200, new __VLS_200({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }));
             const __VLS_202 = __VLS_201({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_201));
             let __VLS_204;
@@ -2022,13 +2040,13 @@ else if (__VLS_ctx.activeSection === 'all') {
             // @ts-ignore
             const __VLS_249 = __VLS_asFunctionalComponent(__VLS_248, new __VLS_248({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }));
             const __VLS_250 = __VLS_249({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }, ...__VLS_functionalComponentArgsRest(__VLS_249));
             let __VLS_252;
             let __VLS_253;
@@ -2041,23 +2059,24 @@ else if (__VLS_ctx.activeSection === 'all') {
                         return;
                     if (!!(!__VLS_ctx.sceneTaskTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleComplete(data);
                 }
             };
             __VLS_251.slots.default;
+            (data.isCompleted ? '取消完成' : '完成');
             var __VLS_251;
             const __VLS_256 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_257 = __VLS_asFunctionalComponent(__VLS_256, new __VLS_256({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }));
             const __VLS_258 = __VLS_257({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_257));
             let __VLS_260;
             let __VLS_261;
@@ -2070,23 +2089,24 @@ else if (__VLS_ctx.activeSection === 'all') {
                         return;
                     if (!!(!__VLS_ctx.sceneTaskTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_259.slots.default;
-            (data.isCompleted ? '取消完成' : '标记完成');
             var __VLS_259;
             const __VLS_264 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_265 = __VLS_asFunctionalComponent(__VLS_264, new __VLS_264({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }));
             const __VLS_266 = __VLS_265({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }, ...__VLS_functionalComponentArgsRest(__VLS_265));
             let __VLS_268;
@@ -2111,12 +2131,12 @@ else if (__VLS_ctx.activeSection === 'all') {
             // @ts-ignore
             const __VLS_273 = __VLS_asFunctionalComponent(__VLS_272, new __VLS_272({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }));
             const __VLS_274 = __VLS_273({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_273));
             let __VLS_276;
@@ -2332,13 +2352,13 @@ else if (__VLS_ctx.activeSection === 'all') {
             // @ts-ignore
             const __VLS_321 = __VLS_asFunctionalComponent(__VLS_320, new __VLS_320({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }));
             const __VLS_322 = __VLS_321({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "primary",
+                size: "small",
+                type: "success",
             }, ...__VLS_functionalComponentArgsRest(__VLS_321));
             let __VLS_324;
             let __VLS_325;
@@ -2351,23 +2371,24 @@ else if (__VLS_ctx.activeSection === 'all') {
                         return;
                     if (!!(!__VLS_ctx.nonSceneTaskTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleComplete(data);
                 }
             };
             __VLS_323.slots.default;
+            (data.isCompleted ? '取消完成' : '完成');
             var __VLS_323;
             const __VLS_328 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_329 = __VLS_asFunctionalComponent(__VLS_328, new __VLS_328({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }));
             const __VLS_330 = __VLS_329({
                 ...{ 'onClick': {} },
-                link: true,
-                type: "success",
+                size: "small",
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_329));
             let __VLS_332;
             let __VLS_333;
@@ -2380,23 +2401,24 @@ else if (__VLS_ctx.activeSection === 'all') {
                         return;
                     if (!!(!__VLS_ctx.nonSceneTaskTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_331.slots.default;
-            (data.isCompleted ? '取消完成' : '标记完成');
             var __VLS_331;
             const __VLS_336 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_337 = __VLS_asFunctionalComponent(__VLS_336, new __VLS_336({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }));
             const __VLS_338 = __VLS_337({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
+                plain: true,
                 type: "warning",
             }, ...__VLS_functionalComponentArgsRest(__VLS_337));
             let __VLS_340;
@@ -2421,12 +2443,12 @@ else if (__VLS_ctx.activeSection === 'all') {
             // @ts-ignore
             const __VLS_345 = __VLS_asFunctionalComponent(__VLS_344, new __VLS_344({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }));
             const __VLS_346 = __VLS_345({
                 ...{ 'onClick': {} },
-                link: true,
+                size: "small",
                 type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_345));
             let __VLS_348;
