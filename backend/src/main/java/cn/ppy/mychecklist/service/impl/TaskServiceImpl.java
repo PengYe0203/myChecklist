@@ -94,6 +94,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             }
         }
 
+        normalizeRecurringSchedule(task);
+
         return this.save(task) ? "创建成功" : "创建失败";
     }
 
@@ -105,6 +107,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 .one();
 
         if(oldTask == null) return "更新失败：任务不存在或不属于当前用户";
+
+        if(task.getType() == TaskType.RECURRING) {
+            normalizeRecurringSchedule(task);
+        }
 
         // 这里需要显式set每个字段
         // 因为如果直接updateById, 可能会忽略空字段，导致用户无法清空这些属性
@@ -125,6 +131,35 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             .set("is_completed", task.getIsCompleted());
 
         return this.update(updateWrapper) ? "更新成功" : "更新失败";
+    }
+
+    private void normalizeRecurringSchedule(Task task) {
+        if (task == null || task.getType() != TaskType.RECURRING) return;
+        if (task.getCronConfig() == null || task.getCronConfig().isBlank()) return;
+
+        LocalDateTime nextCycleStart = CronUtils.getNextExecution(task.getCronConfig(), LocalDateTime.now());
+        if (nextCycleStart == null) return;
+
+        if (task.getStartTime() != null) {
+            task.setStartTime(nextCycleStart);
+        }
+
+        if (task.getEndTime() != null) {
+            task.setEndTime(nextCycleStart.toLocalDate().atTime(task.getEndTime().toLocalTime()));
+        }
+
+        if (task.getCronConfig().startsWith("DAY_INTERVAL|")) {
+            try {
+                int first = task.getCronConfig().indexOf('|');
+                int second = task.getCronConfig().indexOf('|', first + 1);
+                if (first > 0 && second > first) {
+                    int stepDays = Math.max(1, Integer.parseInt(task.getCronConfig().substring(first + 1, second)));
+                    task.setCronConfig("DAY_INTERVAL|" + stepDays + "|" + nextCycleStart);
+                }
+            } catch (Exception ignored) {
+                // 保持原 cronConfig，不让格式问题阻断保存
+            }
+        }
     }
 
     @Override
