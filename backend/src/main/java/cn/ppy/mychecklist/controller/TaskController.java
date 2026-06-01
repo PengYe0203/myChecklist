@@ -1,6 +1,7 @@
 package cn.ppy.mychecklist.controller;
 
 import cn.ppy.mychecklist.entity.Task;
+import cn.ppy.mychecklist.enums.RunStatusType;
 import cn.ppy.mychecklist.service.TaskService;
 import cn.ppy.mychecklist.util.Result;
 
@@ -74,5 +75,11 @@ public class TaskController {
     public Result<String> heartbeat(@PathVariable Long id) {
         taskService.heartbeat(id);
         return Result.success("心跳同步成功");
+    }
+
+    @PostMapping("/toggleRunStatus/{id}")
+    public Result<String> toggleRunStatus(@PathVariable Long id, @RequestParam RunStatusType status) {
+        taskService.toggleRunStatus(id, status);
+        return Result.success("运行状态切换成功");
     }
 }

@@ -522,6 +522,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 task.setOwnDuration(own + seconds);
                 updateActualDuration(task);
 
+                // 记录时间片段用于分布统计
+                recordSegment(task, task.getLastStartTime(), now);
+
                 // 向上同步时长
                 if (Boolean.TRUE.equals(task.getInheritParentTime())) {
                     updateParentSubDuration(task.getParentId(), seconds, context);
