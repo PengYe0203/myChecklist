@@ -78,8 +78,14 @@ public class TaskController {
     }
 
     @PostMapping("/toggleRunStatus/{id}")
-    public Result<String> toggleRunStatus(@PathVariable Long id, @RequestParam RunStatusType status) {
-        taskService.toggleRunStatus(id, status);
+    public Result<String> toggleRunStatus(@PathVariable Long id, @RequestParam String status) {
+        RunStatusType runStatus;
+        try {
+            runStatus = RunStatusType.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            return Result.error("无效的运行状态: " + status);
+        }
+        taskService.toggleRunStatus(id, runStatus);
         return Result.success("运行状态切换成功");
     }
 }
