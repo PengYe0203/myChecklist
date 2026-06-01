@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      context: ./backend  #在backend目录下有Dockerfile
+    env_file:
+      - ./.env  #在根目录下有.env文件，里面包含了后端服务需要的环境变量
+    environment:
+      SPRING_PROFILES_ACTIVE: prod  #设置Spring Boot的运行环境为生产环境
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend  #在frontend目录下有Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend

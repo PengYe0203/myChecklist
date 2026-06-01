@@ -2317,7 +2317,7 @@ onBeforeUnmount(() => {
 }
 
 .task-type-icon-ddl {
-  color: #0b3d91;
+  color: #fb7676; /* lighter red */
 }
 
 .task-type-icon-note {
