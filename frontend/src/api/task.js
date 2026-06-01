@@ -20,6 +20,9 @@ export const toggleActiveApi = (id, active) => {
 export const toggleCompleteApi = (id, complete) => {
     return http.post(`/tasks/toggleComplete/${id}`, null, { params: { complete } });
 };
+export const toggleRunStatusApi = (id, status) => {
+    return http.post(`/tasks/toggleRunStatus/${id}`, null, { params: { status } });
+};
 export const heartbeatApi = (id) => {
     return http.post(`/tasks/heartbeat/${id}`);
 };

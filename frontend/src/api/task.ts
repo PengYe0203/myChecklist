@@ -53,6 +53,10 @@ export const toggleCompleteApi = (id: number, complete: boolean) => {
   return http.post(`/tasks/toggleComplete/${id}`, null, { params: { complete } }) as Promise<ApiResult<string>>;
 };
 
+export const toggleRunStatusApi = (id: number, status: 'NOT_STARTED' | 'IN_PROGRESS' | 'PAUSED') => {
+  return http.post(`/tasks/toggleRunStatus/${id}`, null, { params: { status } }) as Promise<ApiResult<string>>;
+};
+
 export const heartbeatApi = (id: number) => {
   return http.post(`/tasks/heartbeat/${id}`) as Promise<ApiResult<string>>;
 };

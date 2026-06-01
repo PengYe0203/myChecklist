@@ -72,6 +72,18 @@
                     <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
                   </el-tooltip>
                   <span class="task-node-title">{{ data.title }}</span>
+                  <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
+                    <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                      <el-icon>
+                        <VideoPause v-if="isHeartbeatTask(data)" />
+                        <VideoPlay v-else />
+                      </el-icon>
+                    </button>
+                    <div class="task-node-clock-bar">
+                      <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="6" :color="'#93c5fd'" />
+                      <span class="clock-progress-text">{{ clockLabel(data) }}</span>
+                    </div>
+                  </div>
                   
                 </div>
                 <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
@@ -132,6 +144,18 @@
                         <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
                       </el-tooltip>
                       <span class="task-node-title">{{ data.title }}</span>
+                      <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
+                        <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                          <el-icon>
+                            <VideoPause v-if="isHeartbeatTask(data)" />
+                            <VideoPlay v-else />
+                          </el-icon>
+                        </button>
+                        <div class="task-node-clock-bar">
+                          <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
+                          <span class="clock-progress-text">{{ clockLabel(data) }}</span>
+                        </div>
+                      </div>
                     
                   </div>
                     <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
@@ -187,6 +211,18 @@
                       <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
                     </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
+                    <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
+                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                        <el-icon>
+                          <VideoPause v-if="isHeartbeatTask(data)" />
+                          <VideoPlay v-else />
+                        </el-icon>
+                      </button>
+                      <div class="task-node-clock-bar">
+                        <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
+                        <span class="clock-progress-text">{{ clockLabel(data) }}</span>
+                      </div>
+                    </div>
                     
                   </div>
 
@@ -250,6 +286,18 @@
                     </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
                     <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data, false)">细分</el-button>
+                    <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
+                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                        <el-icon>
+                          <VideoPause v-if="isHeartbeatTask(data)" />
+                          <VideoPlay v-else />
+                        </el-icon>
+                      </button>
+                      <div class="task-node-clock-bar">
+                        <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
+                        <span class="clock-progress-text">{{ clockLabel(data) }}</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
@@ -308,6 +356,18 @@
                       <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
                     </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
+                    <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
+                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                        <el-icon>
+                          <VideoPause v-if="isHeartbeatTask(data)" />
+                          <VideoPlay v-else />
+                        </el-icon>
+                      </button>
+                      <div class="task-node-clock-bar">
+                        <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
+                        <span class="clock-progress-text">{{ clockLabel(data) }}</span>
+                      </div>
+                    </div>
                     
                   </div>
 
@@ -854,15 +914,17 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { Calendar, Clock, Document, Plus } from '@element-plus/icons-vue';
+import { Calendar, Clock, Document, Plus, VideoPause, VideoPlay } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import {
   createTaskApi,
   deleteTaskApi,
+  heartbeatApi,
   getAllTasksApi,
   updateTaskApi,
   toggleActiveApi,
   toggleCompleteApi,
+  toggleRunStatusApi,
   type TaskItem,
 } from '@/api/task';
 import { editReviewApi, getAllReviewsApi, type ReviewItem } from '@/api/review';
@@ -924,6 +986,8 @@ const authStore = useAuthStore();
 const activeSection = ref<SectionKey>('today');
 const loadingTasks = ref(false);
 const savingReview = ref(false);
+const heartbeatNow = ref(Date.now());
+const heartbeatSyncing = ref(false);
 const taskDialogVisible = ref(false);
 const taskDialogStep = ref(0);
 const taskDialogMode = ref<'create' | 'edit' | 'view'>('create');
@@ -943,6 +1007,9 @@ const taskTypeOptions: Array<{ label: string; value: number }> = [
 ];
 
 const recurringDefaultTime = '04:00:00';
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+let heartbeatTimer: number | null = null;
 
 const cycleModeOptions: Array<{ label: string; value: RecurrenceMode }> = [
   { label: '每几天执行一次', value: 'interval' as const },
@@ -991,6 +1058,93 @@ const settlementTypeOptions: Array<{ label: string; value: number }> = [
 ];
 
 const normalizeNumberList = (values: number[]) => Array.from(new Set(values)).sort((left, right) => left - right);
+
+const parseHeartbeatTime = (value?: string) => {
+  if (!value) return null;
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const localRunStatus = ref<Record<number, string>>({});
+
+const getRunStatusKey = (task: TaskItem) => {
+  const local = localRunStatus.value[task.taskId];
+  return local ?? String(task.runStatus ?? 0);
+};
+
+const getRunStatusHasLastStart = (task: TaskItem) => {
+  // 覆写表中有该任务 key 说明被乐观更新过，视为有 lastStartTime
+  if (localRunStatus.value[task.taskId] !== undefined) return true;
+  return !!task.lastStartTime;
+};
+
+const isHeartbeatTask = (task: TaskItem) => getRunStatusKey(task) === '1' && getRunStatusHasLastStart(task) && !task.isCompleted;
+
+const nextRunStatus = (task: TaskItem): 'IN_PROGRESS' | 'PAUSED' => (isHeartbeatTask(task) ? 'PAUSED' : 'IN_PROGRESS');
+
+const liveActual = (task: TaskItem) => {
+  const base = Number(task.actualDuration ?? 0);
+  if (!isHeartbeatTask(task)) return base;
+  const start = parseHeartbeatTime(task.lastStartTime);
+  if (!start) return base;
+  const elapsed = Math.max(0, Math.floor((heartbeatNow.value - start.getTime()) / 1000));
+  return base + elapsed;
+};
+
+const progressPercent = (task: TaskItem) => {
+  const target = Number(task.targetDuration ?? 0);
+  if (target <= 0) return 0;
+  return Math.min(100, Math.round((liveActual(task) / target) * 100));
+};
+
+const formatDurationHMS = (seconds?: number) => {
+  const value = Math.max(0, Number(seconds ?? 0));
+  const h = Math.floor(value / 3600);
+  const m = Math.floor((value % 3600) / 60);
+  const s = value % 60;
+  const pad = (n: number) => `${n}`.padStart(2, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+};
+
+const clockLabel = (task: TaskItem) => {
+  const actual = formatDurationHMS(liveActual(task));
+  const target = Number(task.targetDuration ?? 0) > 0 ? formatDurationHMS(task.targetDuration) : '--:--:--';
+  return `${actual} / ${target}`;
+};
+
+const startHeartbeatTimer = () => {
+  if (heartbeatTimer !== null) return;
+  heartbeatTimer = window.setInterval(() => {
+    heartbeatNow.value = Date.now();
+    if (heartbeatSyncing.value) return;
+
+    const runningTasks = allTasks.value.filter(isHeartbeatTask);
+    const dueTasks = runningTasks.filter((task) => {
+      const start = parseHeartbeatTime(task.lastStartTime);
+      if (!start) return false;
+      return heartbeatNow.value - start.getTime() >= HEARTBEAT_INTERVAL_MS;
+    });
+
+    if (!dueTasks.length) return;
+
+    heartbeatSyncing.value = true;
+    void Promise.all(
+      dueTasks.map((task) =>
+        heartbeatApi(task.taskId).catch(() => {})
+      ),
+    ).finally(async () => {
+      await loadTasks();
+      heartbeatSyncing.value = false;
+    });
+  }, 1000);
+};
+
+const stopHeartbeatTimer = () => {
+  if (heartbeatTimer === null) return;
+  window.clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+};
 
 const getTodayDatePart = () => {
   const now = new Date();
@@ -1577,6 +1731,8 @@ const loadTasks = async () => {
   try {
     const response = await getAllTasksApi();
     allTasks.value = response.data || [];
+    localRunStatus.value = {};
+    heartbeatNow.value = Date.now();
   } finally {
     loadingTasks.value = false;
   }
@@ -1632,15 +1788,82 @@ const handleLogout = async () => {
 };
 
 const toggleActive = async (task: TreeTask) => {
-  await toggleActiveApi(task.taskId, !Boolean(task.active));
-  ElMessage.success('任务状态已更新');
-  await loadTasks();
+  const prevActive = !!task.active;
+  task.active = !prevActive;
+  try {
+    await toggleActiveApi(task.taskId, !prevActive);
+    ElMessage.success('任务状态已更新');
+  } catch {
+    task.active = prevActive;
+  }
 };
 
 const toggleComplete = async (task: TreeTask) => {
-  await toggleCompleteApi(task.taskId, !Boolean(task.isCompleted));
-  ElMessage.success('完成状态已更新');
-  await loadTasks();
+  const prevCompleted = !!task.isCompleted;
+  task.isCompleted = !prevCompleted;
+  try {
+    await toggleCompleteApi(task.taskId, !prevCompleted);
+    ElMessage.success('完成状态已更新');
+  } catch {
+    task.isCompleted = prevCompleted;
+  }
+};
+
+const toggleRunStatus = async (task: TreeTask) => {
+  const targetStatus = nextRunStatus(task);
+  const prevRunStatus = String(task.runStatus ?? '0');
+  const prevLastStart = task.lastStartTime;
+  const prevActual = task.actualDuration;
+  const settledActual = liveActual(task); // 暂停前先记下实时值
+
+  // 软约束：启动任务时如果存在时长同步冲突，弹窗提醒
+  if (targetStatus === 'IN_PROGRESS') {
+    // 1. 该任务下是否存在真正在运行且同步的子任务（有 lastStartTime 才算运行）
+    const runningInheritedChildren = allTasks.value.filter(
+      (t) => t.parentId === task.taskId
+        && getRunStatusKey(t) === '1'
+        && !!t.lastStartTime
+        && Boolean(t.inheritParentTime),
+    );
+    // 2. 该任务是否同步到父任务、且父任务真正在运行
+    const runningParent = Boolean(task.inheritParentTime) && task.parentId != null
+      ? allTasks.value.find((t) => t.taskId === task.parentId && getRunStatusKey(t) === '1' && !!t.lastStartTime)
+      : null;
+    if (runningInheritedChildren.length > 0 || runningParent) {
+      const reason = runningInheritedChildren.length > 0
+        ? '该任务下存在正在计时的子任务（启用了时长同步）'
+        : '该任务的父任务正在运行，当前子任务的时长同步会导致重复计算';
+      try {
+        await ElMessageBox.confirm(
+          `${reason}，同时运行会导致时长重复计算。确定要继续吗？`,
+          '提示',
+          { confirmButtonText: '继续开始', cancelButtonText: '取消', type: 'warning' },
+        );
+      } catch {
+        return;
+      }
+    }
+  }
+
+  // 乐观更新
+  task.runStatus = targetStatus === 'IN_PROGRESS' ? '1' : '2';
+  task.lastStartTime = targetStatus === 'IN_PROGRESS' ? new Date().toISOString() : prevLastStart;
+  // 用覆写表传递运行状态给软约束检查，避免直接改 allTasks.value 触发 tree rebuild
+  localRunStatus.value[task.taskId] = targetStatus === 'IN_PROGRESS' ? '1' : '2';
+  try {
+    await toggleRunStatusApi(task.taskId, targetStatus);
+    // 暂停后后端已结算，用实时值同步本地 actualDuration
+    if (targetStatus === 'PAUSED') {
+      task.actualDuration = settledActual;
+    }
+  } catch {
+    // 回滚
+    task.runStatus = prevRunStatus;
+    task.lastStartTime = prevLastStart;
+    task.actualDuration = prevActual;
+    delete localRunStatus.value[task.taskId];
+    return;
+  }
 };
 
 const taskTypeLabel = (type?: string | number) => {
@@ -1995,6 +2218,7 @@ onMounted(async () => {
   if (storedDraft !== null) {
     reviewDraft.value = storedDraft;
   }
+  startHeartbeatTimer();
 });
 
 watch(reviewDraft, (value) => {
@@ -2005,6 +2229,7 @@ onBeforeUnmount(() => {
   if (reviewDraft.value.trim()) {
     syncReviewDraft();
   }
+  stopHeartbeatTimer();
 });
 </script>
 
@@ -2290,6 +2515,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 3px 10px rgba(31, 35, 41, 0.028);
   box-sizing: border-box;
   overflow: hidden;
+  position: relative;
 }
 
 .task-node-main {
@@ -2303,8 +2529,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
+  padding-right: 250px;
 }
 
 .task-type-icon {
@@ -2326,9 +2553,66 @@ onBeforeUnmount(() => {
 
 .task-node-title {
   flex: 1 1 0;
+  min-width: 0;
   font-weight: 700;
   color: #1f2329;
   font-size: 14px;
+}
+
+.task-node-clock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 234px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(147, 197, 253, 0.12);
+  border: 1px solid rgba(147, 197, 253, 0.3);
+  z-index: 1;
+}
+
+.task-run-toggle {
+  width: 33px;
+  height: 33px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #2563eb;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: 21px;
+}
+
+.task-run-toggle:hover {
+  color: #1d4ed8;
+}
+
+.task-node-clock-bar {
+  width: 100%;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clock-progress-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.task-node-clock:not(.is-running) {
+  background: rgba(229, 231, 235, 0.4);
+  border-color: rgba(209, 213, 219, 0.85);
 }
 
 .btn-enable {
