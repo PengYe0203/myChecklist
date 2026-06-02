@@ -94,6 +94,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             }
         }
 
+        // 如果是周期任务，自动规范化时间上下文
         if(task.getType() == TaskType.RECURRING) {
             normalizeRecurringSchedule(task);
         }
@@ -146,6 +147,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             .set("is_active", task.isActive())
             .set("is_completed", task.getIsCompleted());
 
+        
+
         return this.update(updateWrapper) ? "更新成功" : "更新失败";
     }
 
@@ -156,8 +159,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         LocalDateTime nextCycleStart = CronUtils.getNextExecution(task.getCronConfig(), LocalDateTime.now());
         if (nextCycleStart == null) return;
 
+        // 日期设置为下一周期开始，时分保持不变
         if (task.getStartTime() != null) {
-            task.setStartTime(nextCycleStart);
+            task.setStartTime(nextCycleStart.toLocalDate().atTime(task.getStartTime().toLocalTime()));
         }
 
         if (task.getEndTime() != null) {
