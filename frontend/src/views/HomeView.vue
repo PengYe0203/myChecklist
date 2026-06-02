@@ -59,6 +59,9 @@
             <div class="task-node">
               <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                 <div class="task-node-title-row">
+                  <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                    <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                  </el-tooltip>
                   <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
                     <Clock />
                   </el-icon>
@@ -68,10 +71,9 @@
                   <el-icon class="task-type-icon task-type-icon-note" v-else>
                     <Document />
                   </el-icon>
-                  <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
-                    <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
-                  </el-tooltip>
                   <span class="task-node-title">{{ data.title }}</span>
+                  <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
+                  <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                   <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
                     <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
                       <el-icon>
@@ -83,14 +85,9 @@
                       <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="6" :color="'#93c5fd'" />
                       <span class="clock-progress-text">{{ clockLabel(data) }}</span>
                     </div>
-                  </div>
                   
                 </div>
-                <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
-                  {{ formatTaskMetaSummary(data) }}
-                </div>
               </div>
-
                 <div class="task-node-actions">
                 <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
                   {{ data.isCompleted ? '撤回' : '完成' }}
@@ -101,6 +98,7 @@
                   {{ data.active ? '停用' : '启用' }}
                 </el-button>
                 <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
               </div>
             </div>
           </template>
@@ -131,6 +129,9 @@
               <div class="task-node">
                 <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
                       <Clock />
                     </el-icon>
@@ -140,10 +141,9 @@
                     <el-icon class="task-type-icon task-type-icon-note" v-else>
                       <Document />
                     </el-icon>
-                      <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
-                        <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
-                      </el-tooltip>
                       <span class="task-node-title">{{ data.title }}</span>
+                      <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
+                      <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                       <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
                         <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
                           <el-icon>
@@ -158,9 +158,6 @@
                       </div>
                     
                   </div>
-                    <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
-                      {{ formatTaskMetaSummary(data) }}
-                    </div>
                 </div>
 
                 <div class="task-node-actions">
@@ -198,6 +195,9 @@
               <div class="task-node">
                 <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
                       <Clock />
                     </el-icon>
@@ -207,10 +207,9 @@
                     <el-icon class="task-type-icon task-type-icon-note" v-else>
                       <Document />
                     </el-icon>
-                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
-                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
-                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
+                    <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
+                    <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
                       <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
                         <el-icon>
@@ -226,9 +225,6 @@
                     
                   </div>
 
-                    <div v-if="formatTaskMetaSummary(data)" class="task-node-meta">
-                      {{ formatTaskMetaSummary(data) }}
-                    </div>
                 </div>
 
                 <div class="task-node-actions">
@@ -262,16 +258,42 @@
 
           <el-tree
             v-else
-            class="task-tree"
+            class="task-tree scene-tree"
             :data="sceneTaskTree"
             node-key="taskId"
             :props="treeProps"
             :expand-on-click-node="false"
           >
             <template #default="{ data }">
-              <div class="task-node">
+              <!-- 场景节点：保持场景风格 -->
+              <div v-if="isScene(data)" class="task-node scene-node">
+                <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
+                  <div class="task-node-title-row scene-title-row">
+                    <el-icon class="task-type-icon task-type-icon-scene">
+                      <Folder />
+                    </el-icon>
+                    <span class="task-node-title scene-node-title">{{ data.title }}</span>
+                    <span v-if="formatTaskMetaSummary(data)" class="task-node-desc scene-node-desc">{{ formatTaskMetaSummary(data) }}</span>
+                  </div>
+                </div>
+
+                <div class="task-node-actions">
+                  <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
+                    {{ data.active ? '停用' : '启用' }}
+                  </el-button>
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data, false)">新建</el-button>
+                  <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
+                </div>
+              </div>
+
+              <!-- 场景内的子任务：常规任务卡片 -->
+              <div v-else class="task-node">
                 <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
                       <Clock />
                     </el-icon>
@@ -281,11 +303,9 @@
                     <el-icon class="task-type-icon task-type-icon-note" v-else>
                       <Document />
                     </el-icon>
-                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
-                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
-                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
-                    <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data, false)">细分</el-button>
+                    <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
+                    <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
                       <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
                         <el-icon>
@@ -299,20 +319,17 @@
                       </div>
                     </div>
                   </div>
-
-                  <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
-                    {{ formatTaskMetaSummary(data) }}
-                  </div>
                 </div>
 
                 <div class="task-node-actions">
                   <el-button size="small" type="success" :class="data.isCompleted ? 'btn-revoke' : ''" @click.stop="toggleComplete(data)">
                     {{ data.isCompleted ? '撤回' : '完成' }}
                   </el-button>
-                  <el-button size="small" :type="data.active ? 'warning' : 'primary'" @click.stop="toggleActive(data)">
+                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
+                  <el-button size="small" class="btn-subdivide" @click.stop="openCreateTaskDialog(data)">细分</el-button>
+                  <el-button size="small" :class="data.active ? 'btn-disable' : 'btn-enable'" @click.stop="toggleActive(data)">
                     {{ data.active ? '停用' : '启用' }}
                   </el-button>
-                  <el-button size="small" type="primary" @click.stop="openEditTaskDialog(data)">编辑</el-button>
                   <el-button size="small" type="danger" @click.stop="deleteTask(data)">删除</el-button>
                 </div>
               </div>
@@ -343,6 +360,9 @@
               <div class="task-node">
                 <div class="task-node-main" @click.stop="openViewTaskDialog(data)">
                   <div class="task-node-title-row">
+                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
+                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
+                    </el-tooltip>
                     <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(data.type) === '1'">
                       <Clock />
                     </el-icon>
@@ -352,10 +372,9 @@
                     <el-icon class="task-type-icon task-type-icon-note" v-else>
                       <Document />
                     </el-icon>
-                    <el-tooltip placement="top" :content="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')">
-                      <span :class="['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]" role="img" :aria-label="data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')" />
-                    </el-tooltip>
                     <span class="task-node-title">{{ data.title }}</span>
+                    <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
+                    <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
                       <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
                         <el-icon>
@@ -371,9 +390,6 @@
                     
                   </div>
 
-                  <div v-if="formatTaskMetaSummary(data)" class="task-node-meta task-node-meta-inline">
-                    {{ formatTaskMetaSummary(data) }}
-                  </div>
                 </div>
 
                 <div class="task-node-actions">
@@ -516,7 +532,10 @@
         </el-steps>
 
         <div v-if="taskDialogMode !== 'view' && taskDialogParent" class="task-dialog-parent-chip">
-          <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(taskDialogParent.type) === '1'">
+          <el-icon class="task-type-icon task-type-icon-scene" v-if="String(taskDialogParent.type) === '3'">
+            <Folder />
+          </el-icon>
+          <el-icon class="task-type-icon task-type-icon-recurring" v-else-if="String(taskDialogParent.type) === '1'">
             <Clock />
           </el-icon>
           <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(taskDialogParent.type) === '2'">
@@ -525,7 +544,8 @@
           <el-icon class="task-type-icon task-type-icon-note" v-else>
             <Document />
           </el-icon>
-          <span>父任务</span>
+          <span v-if="String(taskDialogParent.type) === '3'">场景</span>
+          <span v-else>父任务</span>
           <strong>{{ taskDialogParent.title }}</strong>
         </div>
 
@@ -875,7 +895,7 @@
                 </el-select>
               </el-form-item>
 
-              <el-form-item v-if="taskDialogParent" label="是否同步时长到父任务" prop="inheritParentTime">
+              <el-form-item v-if="taskDialogParent && String(taskDialogParent.type) !== '3'" label="是否同步时长到父任务" prop="inheritParentTime">
                 <el-switch
                   v-model="taskForm.inheritParentTime"
                   active-text="同步"
@@ -914,7 +934,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
-import { Calendar, Clock, Document, Plus, VideoPause, VideoPlay } from '@element-plus/icons-vue';
+import { Calendar, Clock, Document, Folder, Plus, VideoPause, VideoPlay } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth';
 import {
   createTaskApi,
@@ -1333,7 +1353,7 @@ const createDefaultTaskForm = (
     cycleIntervalDays: parsedCron?.cycleIntervalDays ?? 1,
     cycleWeekdays: parsedCron?.cycleWeekdays ?? [],
     cycleMonthDays: parsedCron?.cycleMonthDays ?? [],
-    inheritParentTime: sourceTask?.inheritParentTime ?? (parentTask ? true : false),
+    inheritParentTime: sourceTask?.inheritParentTime ?? (parentTask && String(parentTask.type) !== '3' ? true : false),
     active: sourceTask?.active ?? defaultActive,
     isCompleted: sourceTask?.isCompleted ?? false,
   };
@@ -1373,6 +1393,7 @@ const taskDialogTitle = computed(() => {
   if (taskDialogMode.value === 'view') return taskForm.title || '任务详情';
   if (taskDialogMode.value === 'edit') return '编辑任务';
   if (taskForm.type === 3) return '新建场景';
+  if (taskDialogParent.value && String(taskDialogParent.value.type) === '3') return '新建任务';
   return taskDialogParent.value ? '新建子任务' : '新建任务';
 });
 
@@ -1394,7 +1415,8 @@ const taskDialogWarnings = computed(() => {
     }
   }
 
-  if (parentType !== childType && warnings.length === 0) {
+  // 场景下的子任务不提示类型不一致
+  if (parentType !== childType && warnings.length === 0 && parentType !== '3') {
     warnings.push(`父任务是${taskTypeLabel(parentType)}，当前子任务是${taskTypeLabel(childType)}，子任务将独立进行。`);
   }
 
@@ -1532,7 +1554,7 @@ const setActiveSection = (key: string) => {
 
 const activeSectionTitle = computed(() => sectionMeta[activeSection.value].label);
 const activeSectionBadge = computed(() => sectionMeta[activeSection.value].badge);
-const isSceneDialog = computed(() => taskDialogMode.value === 'create' && String(taskForm.type) === '3');
+const isSceneDialog = computed(() => (taskDialogMode.value === 'create' || taskDialogMode.value === 'edit') && String(taskForm.type) === '3');
 
 const currentAllTree = computed(() => buildTree(allTasks.value));
 const sceneTaskTree = computed(() => filterSceneTree(currentAllTree.value));
@@ -1789,24 +1811,77 @@ const handleLogout = async () => {
 
 const toggleActive = async (task: TreeTask) => {
   const prevActive = !!task.active;
-  task.active = !prevActive;
+  const newActive = !prevActive;
+  // 乐观更新树节点副本
+  task.active = newActive;
   try {
-    await toggleActiveApi(task.taskId, !prevActive);
+    await toggleActiveApi(task.taskId, newActive);
+    // 递归同步本地 allTasks 中该节点及其所有子孙的 active 状态
+    const targetRaw = allTasks.value.find((t) => t.taskId === task.taskId);
+    if (targetRaw) targetRaw.active = newActive;
+    cascadeActiveLocal(task.taskId, newActive);
+    // 强制重建数组引用，触发所有 computed 树重新计算
+    allTasks.value = [...allTasks.value];
     ElMessage.success('任务状态已更新');
   } catch {
     task.active = prevActive;
   }
 };
 
+/** 递归更新本地 allTasks 中指定节点及其所有子孙的 active */
+const cascadeActiveLocal = (parentId: number, active: boolean) => {
+  allTasks.value.forEach((t) => {
+    if (t.parentId === parentId) {
+      t.active = active;
+      cascadeActiveLocal(t.taskId, active);
+    }
+  });
+};
+
 const toggleComplete = async (task: TreeTask) => {
   const prevCompleted = !!task.isCompleted;
-  task.isCompleted = !prevCompleted;
+  const newCompleted = !prevCompleted;
+  task.isCompleted = newCompleted;
   try {
-    await toggleCompleteApi(task.taskId, !prevCompleted);
+    await toggleCompleteApi(task.taskId, newCompleted);
+    // 同步 allTasks 中原对象
+    const targetRaw = allTasks.value.find((t) => t.taskId === task.taskId);
+    if (targetRaw) {
+      targetRaw.isCompleted = newCompleted;
+      if (newCompleted) targetRaw.runStatus = '0';
+    }
+    if (newCompleted) {
+      // 完成：向下级联完成所有子任务
+      cascadeCompleteDownLocal(task.taskId);
+    } else {
+      // 撤回：只向上一级撤回父任务（后端 cancelParentComplete 只撤父不撤子）
+      uncompleteParentLocal(task.parentId);
+    }
+    allTasks.value = [...allTasks.value];
     ElMessage.success('完成状态已更新');
   } catch {
     task.isCompleted = prevCompleted;
   }
+};
+
+/** 完成：向下递归完成所有子任务 */
+const cascadeCompleteDownLocal = (parentId: number) => {
+  allTasks.value.forEach((t) => {
+    if (t.parentId === parentId) {
+      t.isCompleted = true;
+      t.runStatus = '0';
+      cascadeCompleteDownLocal(t.taskId);
+    }
+  });
+};
+
+/** 撤回：向上递归撤回父任务 */
+const uncompleteParentLocal = (parentId: number | null | undefined) => {
+  if (parentId == null || parentId === 0) return;
+  const parent = allTasks.value.find((t) => t.taskId === parentId);
+  if (!parent || !parent.isCompleted) return;
+  parent.isCompleted = false;
+  uncompleteParentLocal(parent.parentId);
 };
 
 const toggleRunStatus = async (task: TreeTask) => {
@@ -2092,9 +2167,62 @@ const endOfToday = () => {
 
 const isScene = (task: TaskItem) => String(task.type) === '3';
 
+/**
+ * 判断周期任务（type='1'）今天是否属于执行日。
+ * 根据 cronConfig 的不同格式：
+ * - DAY_INTERVAL|N|anchorTime：每隔 N 天，以 anchor 为基准，计算今天是否命中
+ * - 0 mm HH ? * MON,WED,FRI：每周指定星期
+ * - 0 mm HH 1,15 * ?：每月指定日期
+ * 全部使用业务日（凌晨4点分界）。
+ */
+const isRecurringTaskToday = (task: TaskItem): boolean => {
+  if (String(task.type) !== '1' || !task.cronConfig) return false;
+
+  const config = parseCronConfig(task.cronConfig);
+  if (!config) return false;
+
+  const todayBizDate = getBusinessDayDate(new Date());
+
+  if (config.cycleMode === 'interval') {
+    // 从原始 cronConfig 中提取 anchor 时间，parseCronConfig 不返回它
+    const intervalMatch = /^DAY_INTERVAL\|(\d+)\|([0-9T:\-]+)$/i.exec(task.cronConfig.trim());
+    if (!intervalMatch) return false;
+    const stepDays = Math.max(1, Number(intervalMatch[1]));
+    const anchorStr = intervalMatch[2].replace(' ', 'T');
+    const anchorDate = new Date(anchorStr);
+    if (Number.isNaN(anchorDate.getTime())) return false;
+
+    const anchorBizKey = formatBusinessDateKey(anchorDate);
+    const todayBizKey = formatBusinessDateKey(todayBizDate);
+    const anchorDay = new Date(anchorBizKey + 'T00:00:00');
+    const todayDay = new Date(todayBizKey + 'T00:00:00');
+    const diffDays = Math.floor((todayDay.getTime() - anchorDay.getTime()) / 86_400_000);
+
+    return diffDays >= 0 && diffDays % stepDays === 0;
+  }
+
+  if (config.cycleMode === 'weekly') {
+    // getDay(): 0=Sun → 转换为 1=Mon…7=Sun
+    const jsDayOfWeek = todayBizDate.getDay();
+    const bizDayOfWeek = jsDayOfWeek === 0 ? 7 : jsDayOfWeek;
+    return config.cycleWeekdays.includes(bizDayOfWeek);
+  }
+
+  if (config.cycleMode === 'monthly') {
+    const dayOfMonth = todayBizDate.getDate();
+    return config.cycleMonthDays.includes(dayOfMonth);
+  }
+
+  return false;
+};
+
 const isTodayTask = (task: TaskItem) => {
   if (isScene(task)) return false;
-  if (!Boolean(task.active) || !task.endTime) return false;
+  if (!Boolean(task.active)) return false;
+  // 周期任务：靠循环周期判断是否属于今天
+  if (String(task.type) === '1') return isRecurringTaskToday(task);
+  // 非周期任务：靠 endTime 判断
+  if (!task.endTime) return false;
   return formatBusinessDateKey(task.endTime) === todayKey.value;
 };
 
@@ -2105,12 +2233,18 @@ const isTodoTask = (task: TaskItem) => {
 
 const isTodoTodayTask = (task: TaskItem) => {
   if (!isTodoTask(task)) return false;
+  // 周期任务：靠循环周期判断
+  if (String(task.type) === '1') return isRecurringTaskToday(task);
+  // 非周期任务：靠 endTime 判断
   if (!task.endTime) return false;
   return formatBusinessDateKey(task.endTime) === todayKey.value;
 };
 
 const isTodoFutureTask = (task: TaskItem) => {
   if (!isTodoTask(task)) return false;
+  // 周期任务：今天属于执行日的在"今日待办"，其余在"后续待办"
+  if (String(task.type) === '1') return !isRecurringTaskToday(task);
+  // 非周期任务：无 endTime 视为后续
   if (!task.endTime) return true;
   return formatBusinessDateKey(task.endTime) !== todayKey.value;
 };
@@ -2155,9 +2289,10 @@ const sortTree = (nodes: TreeTask[]) => {
 const filterSceneTree = (nodes: TreeTask[]): TreeTask[] => {
   return nodes.reduce<TreeTask[]>((accumulator, node) => {
     if (isScene(node)) {
+      // 场景节点：保留全部子孙（不递归过滤），让 el-tree 能展开查看所有子任务
       accumulator.push({
         ...node,
-        children: node.children ? filterSceneTree(node.children) : [],
+        children: node.children ?? [],
       });
       return accumulator;
     }
@@ -2197,6 +2332,13 @@ const taskOrderRank = (task: TaskItem) => {
 
 const filterTree = (nodes: TreeTask[], predicate: (task: TaskItem) => boolean): TreeTask[] => {
   return nodes.reduce<TreeTask[]>((accumulator, node) => {
+    // 场景节点透明化：不显示自身，将其匹配的子任务提升到当前层级
+    if (isScene(node)) {
+      const filteredChildren = node.children ? filterTree(node.children, predicate) : [];
+      accumulator.push(...filteredChildren);
+      return accumulator;
+    }
+
     const filteredChildren = node.children ? filterTree(node.children, predicate) : [];
     if (predicate(node) || filteredChildren.length > 0) {
       accumulator.push({ ...node, children: filteredChildren });
@@ -2531,12 +2673,24 @@ onBeforeUnmount(() => {
   gap: 6px;
   flex-wrap: nowrap;
   min-width: 0;
-  padding-right: 250px;
+}
+
+.task-node-clock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 234px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(147, 197, 253, 0.12);
+  border: 1px solid rgba(147, 197, 253, 0.3);
 }
 
 .task-type-icon {
   flex: 0 0 auto;
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .task-type-icon-recurring {
@@ -2544,19 +2698,64 @@ onBeforeUnmount(() => {
 }
 
 .task-type-icon-ddl {
-  color: #fb7676; /* lighter red */
+  color: #fb7676;
 }
 
 .task-type-icon-note {
   color: #6b7280;
 }
 
+/* ===== 场景（文件夹）专属样式 ===== */
+.task-type-icon-scene {
+  color: #d4a017;
+  font-size: 20px;
+}
+
+.scene-node {
+  background: linear-gradient(135deg, rgba(247, 213, 74, 0.06), rgba(255, 236, 145, 0.10));
+  border: 1px solid rgba(212, 160, 23, 0.28);
+  border-left: 4px solid rgba(212, 160, 23, 0.45);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(180, 130, 0, 0.06);
+  padding: 10px 14px;
+}
+
+.scene-node:hover {
+  background: linear-gradient(135deg, rgba(247, 213, 74, 0.12), rgba(255, 236, 145, 0.16));
+  border-color: rgba(212, 160, 23, 0.45);
+  border-left-color: rgba(180, 130, 0, 0.55);
+}
+
+.scene-title-row {
+  padding-right: 0;
+}
+
+.scene-node-title {
+  font-size: 15px;
+  color: #5a4700;
+}
+
+.scene-node-desc {
+  color: #a09050;
+}
+
+/* 场景子节点在 tree 内缩进但不继承场景卡片样式 */
+.scene-tree :deep(.el-tree-node__children .scene-node) {
+  background: rgba(249, 250, 252, 0.96);
+  border-left-color: rgba(212, 160, 23, 0.22);
+  box-shadow: none;
+}
+
 .task-node-title {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
   font-weight: 700;
   color: #1f2329;
-  font-size: 14px;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .task-node-clock {
@@ -2687,6 +2886,7 @@ onBeforeUnmount(() => {
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+  flex: 0 0 auto;
   background: #e6e7ea;
   border: 1px solid rgba(0,0,0,0.06);
 }
@@ -2710,12 +2910,40 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.task-node-title {
-  max-width: 100%;
+.task-node-desc {
+  flex: 0 1 auto;
+  max-width: 200px;
   min-width: 0;
+  margin-left: 0px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #8a92a2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1;
+  padding-bottom: 1px;
+  align-self: flex-end;
+}
+
+.task-node-children-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 7.5px;
+  background: rgba(59, 130, 246, 0.25);
+  border: 1px solid rgba(59, 130, 246, 0.50);
+  color: #2563eb;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  margin-left: 0px;
+  margin-right: 0px;
+  user-select: none;
 }
 
 .task-tree :deep(.el-tree-node__children .task-node) {
@@ -3005,6 +3233,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   flex-wrap: wrap;
   padding: 12px 14px;
+  margin-bottom: 10px;
   border-radius: 14px;
   background: #f7f9fc;
   border: 1px solid rgba(0, 0, 0, 0.06);
@@ -3016,7 +3245,7 @@ onBeforeUnmount(() => {
 }
 
 .task-dialog-alert {
-  margin: 0;
+  margin: 0 0 10px 0;
 }
 
 .task-dialog-form {
@@ -3052,13 +3281,139 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
+  /* === 整体：flex column 三段 === */
   .home-shell {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
   }
 
+  /* === 区块1：顶部条（logo + 用户名片 + 退出） === */
   .sidebar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    height: auto;
+    overflow: visible;
     border-right: none;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    background: rgba(255, 255, 255, 0.97);
+  }
+
+  .brand {
+    padding: 4px 6px;
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+  }
+
+  .brand-title {
+    font-size: 15px;
+  }
+
+  .user-card {
+    margin: 0 0 0 auto;
+    padding: 4px 8px;
+    flex: 0 0 auto;
+    border-radius: 10px;
+    box-shadow: none;
+    border: none;
+    background: transparent;
+  }
+
+  .user-card-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .user-card-name {
+    font-size: 13px;
+  }
+
+  .sidebar-bottom {
+    margin: 0 0 0 8px;
+    padding: 0;
+    flex: 0 0 auto;
+  }
+
+  .logout-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    width: auto;
+    border-radius: 8px;
+  }
+
+  /* === 区块2：内容区（填满剩余空间） === */
+  .content-area {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 14px;
+    padding-bottom: 64px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  /* === 区块3：底部固定条（四个导航按钮） === */
+  .sidebar > .nav-list {
+    display: none;
+  }
+
+  .nav-list {
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 4px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .nav-item {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 8px 6px;
+    font-size: 12px;
+    border-radius: 10px;
+    justify-content: center;
+  }
+
+  .nav-item small {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 740px) {
+  /* 窄任务卡：缩小时钟条，渐变收缩描述/标题 */
+  .task-node-desc {
+    max-width: 80px;
+  }
+
+  .task-node-clock {
+    width: 190px;
+    padding: 3px 7px;
+    gap: 4px;
+  }
+
+  .task-run-toggle {
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
+  }
+
+  .clock-progress-text {
+    font-size: 11px;
   }
 }
 
@@ -3083,6 +3438,35 @@ onBeforeUnmount(() => {
 
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-node-desc {
+    display: none;
+  }
+
+  .task-node-children-badge {
+    display: none;
+  }
+
+  .task-node-clock {
+    width: 170px;
+    padding: 2px 6px;
+    gap: 3px;
+  }
+
+  .task-run-toggle {
+    width: 26px;
+    height: 26px;
+    font-size: 16px;
+  }
+
+  .clock-progress-text {
+    font-size: 10px;
+  }
+
+  .task-node-actions .el-button {
+    padding: 3px 6px !important;
+    font-size: 11px !important;
   }
 }
 </style>

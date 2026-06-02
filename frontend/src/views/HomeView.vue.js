@@ -79,38 +79,48 @@ const parseHeartbeatTime = (value) => {
     const parsed = new Date(normalized);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
-const getRunStatusKey = (task) => String(task.runStatus ?? 0);
-const isHeartbeatTask = (task) => getRunStatusKey(task) === '1' && !task.isCompleted;
+const localRunStatus = ref({});
+const getRunStatusKey = (task) => {
+    const local = localRunStatus.value[task.taskId];
+    return local ?? String(task.runStatus ?? 0);
+};
+const getRunStatusHasLastStart = (task) => {
+    // 覆写表中有该任务 key 说明被乐观更新过，视为有 lastStartTime
+    if (localRunStatus.value[task.taskId] !== undefined)
+        return true;
+    return !!task.lastStartTime;
+};
+const isHeartbeatTask = (task) => getRunStatusKey(task) === '1' && getRunStatusHasLastStart(task) && !task.isCompleted;
 const nextRunStatus = (task) => (isHeartbeatTask(task) ? 'PAUSED' : 'IN_PROGRESS');
-const runStatusLabel = (task) => {
-    const status = getRunStatusKey(task);
-    if (status === '1')
-        return '暂停';
-    if (status === '2')
-        return '继续';
-    return '开始';
-};
-const runStatusIcon = (task) => (isHeartbeatTask(task) ? VideoPause : VideoPlay);
-const heartbeatPercent = (task) => {
-    const start = parseHeartbeatTime(task.lastStartTime);
-    if (!start)
-        return 0;
-    const elapsed = Math.max(0, heartbeatNow.value - start.getTime());
-    return Math.min(100, Math.round((elapsed / HEARTBEAT_INTERVAL_MS) * 100));
-};
-const heartbeatRemainingSeconds = (task) => {
-    const start = parseHeartbeatTime(task.lastStartTime);
-    if (!start)
-        return Math.ceil(HEARTBEAT_INTERVAL_MS / 1000);
-    const remaining = HEARTBEAT_INTERVAL_MS - Math.max(0, heartbeatNow.value - start.getTime());
-    return Math.max(0, Math.ceil(remaining / 1000));
-};
-const heartbeatTooltip = (task) => {
+const liveActual = (task) => {
+    const base = Number(task.actualDuration ?? 0);
     if (!isHeartbeatTask(task))
-        return '未运行';
-    return `心跳倒计时 ${heartbeatRemainingSeconds(task)}s`;
+        return base;
+    const start = parseHeartbeatTime(task.lastStartTime);
+    if (!start)
+        return base;
+    const elapsed = Math.max(0, Math.floor((heartbeatNow.value - start.getTime()) / 1000));
+    return base + elapsed;
 };
-const runStatusTooltip = (task) => `点击${runStatusLabel(task)}`;
+const progressPercent = (task) => {
+    const target = Number(task.targetDuration ?? 0);
+    if (target <= 0)
+        return 0;
+    return Math.min(100, Math.round((liveActual(task) / target) * 100));
+};
+const formatDurationHMS = (seconds) => {
+    const value = Math.max(0, Number(seconds ?? 0));
+    const h = Math.floor(value / 3600);
+    const m = Math.floor((value % 3600) / 60);
+    const s = value % 60;
+    const pad = (n) => `${n}`.padStart(2, '0');
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
+};
+const clockLabel = (task) => {
+    const actual = formatDurationHMS(liveActual(task));
+    const target = Number(task.targetDuration ?? 0) > 0 ? formatDurationHMS(task.targetDuration) : '--:--:--';
+    return `${actual} / ${target}`;
+};
 const startHeartbeatTimer = () => {
     if (heartbeatTimer !== null)
         return;
@@ -128,15 +138,8 @@ const startHeartbeatTimer = () => {
         if (!dueTasks.length)
             return;
         heartbeatSyncing.value = true;
-        void Promise.all(dueTasks.map(async (task) => {
-            try {
-                await heartbeatApi(task.taskId);
-                task.lastStartTime = new Date(heartbeatNow.value).toISOString();
-            }
-            catch {
-                // 后端/网络异常由全局拦截器或控制台处理，这里不打断页面
-            }
-        })).finally(() => {
+        void Promise.all(dueTasks.map((task) => heartbeatApi(task.taskId).catch(() => { }))).finally(async () => {
+            await loadTasks();
             heartbeatSyncing.value = false;
         });
     }, 1000);
@@ -665,6 +668,7 @@ const loadTasks = async () => {
     try {
         const response = await getAllTasksApi();
         allTasks.value = response.data || [];
+        localRunStatus.value = {};
         heartbeatNow.value = Date.now();
     }
     finally {
@@ -716,20 +720,76 @@ const handleLogout = async () => {
     await router.push('/login');
 };
 const toggleActive = async (task) => {
-    await toggleActiveApi(task.taskId, !Boolean(task.active));
-    ElMessage.success('任务状态已更新');
-    await loadTasks();
+    const prevActive = !!task.active;
+    task.active = !prevActive;
+    try {
+        await toggleActiveApi(task.taskId, !prevActive);
+        ElMessage.success('任务状态已更新');
+    }
+    catch {
+        task.active = prevActive;
+    }
 };
 const toggleComplete = async (task) => {
-    await toggleCompleteApi(task.taskId, !Boolean(task.isCompleted));
-    ElMessage.success('完成状态已更新');
-    await loadTasks();
+    const prevCompleted = !!task.isCompleted;
+    task.isCompleted = !prevCompleted;
+    try {
+        await toggleCompleteApi(task.taskId, !prevCompleted);
+        ElMessage.success('完成状态已更新');
+    }
+    catch {
+        task.isCompleted = prevCompleted;
+    }
 };
 const toggleRunStatus = async (task) => {
     const targetStatus = nextRunStatus(task);
-    await toggleRunStatusApi(task.taskId, targetStatus);
-    ElMessage.success('运行状态已更新');
-    await loadTasks();
+    const prevRunStatus = String(task.runStatus ?? '0');
+    const prevLastStart = task.lastStartTime;
+    const prevActual = task.actualDuration;
+    const settledActual = liveActual(task); // 暂停前先记下实时值
+    // 软约束：启动任务时如果存在时长同步冲突，弹窗提醒
+    if (targetStatus === 'IN_PROGRESS') {
+        // 1. 该任务下是否存在真正在运行且同步的子任务（有 lastStartTime 才算运行）
+        const runningInheritedChildren = allTasks.value.filter((t) => t.parentId === task.taskId
+            && getRunStatusKey(t) === '1'
+            && !!t.lastStartTime
+            && Boolean(t.inheritParentTime));
+        // 2. 该任务是否同步到父任务、且父任务真正在运行
+        const runningParent = Boolean(task.inheritParentTime) && task.parentId != null
+            ? allTasks.value.find((t) => t.taskId === task.parentId && getRunStatusKey(t) === '1' && !!t.lastStartTime)
+            : null;
+        if (runningInheritedChildren.length > 0 || runningParent) {
+            const reason = runningInheritedChildren.length > 0
+                ? '该任务下存在正在计时的子任务（启用了时长同步）'
+                : '该任务的父任务正在运行，当前子任务的时长同步会导致重复计算';
+            try {
+                await ElMessageBox.confirm(`${reason}，同时运行会导致时长重复计算。确定要继续吗？`, '提示', { confirmButtonText: '继续开始', cancelButtonText: '取消', type: 'warning' });
+            }
+            catch {
+                return;
+            }
+        }
+    }
+    // 乐观更新
+    task.runStatus = targetStatus === 'IN_PROGRESS' ? '1' : '2';
+    task.lastStartTime = targetStatus === 'IN_PROGRESS' ? new Date().toISOString() : prevLastStart;
+    // 用覆写表传递运行状态给软约束检查，避免直接改 allTasks.value 触发 tree rebuild
+    localRunStatus.value[task.taskId] = targetStatus === 'IN_PROGRESS' ? '1' : '2';
+    try {
+        await toggleRunStatusApi(task.taskId, targetStatus);
+        // 暂停后后端已结算，用实时值同步本地 actualDuration
+        if (targetStatus === 'PAUSED') {
+            task.actualDuration = settledActual;
+        }
+    }
+    catch {
+        // 回滚
+        task.runStatus = prevRunStatus;
+        task.lastStartTime = prevLastStart;
+        task.actualDuration = prevActual;
+        delete localRunStatus.value[task.taskId];
+        return;
+    }
 };
 const taskTypeLabel = (type) => {
     switch (String(type)) {
@@ -1112,7 +1172,6 @@ let __VLS_directives;
 /** @type {__VLS_StyleScopedClasses['btn-revoke']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-complete']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-main']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-title']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-tree']} */ ;
 /** @type {__VLS_StyleScopedClasses['el-tree-node__children']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node']} */ ;
@@ -1417,22 +1476,16 @@ if (__VLS_ctx.activeSection === 'today') {
                 ...{ class: "task-node-title" },
             });
             (data.title);
+            if (__VLS_ctx.formatTaskMetaSummary(data)) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-node-desc" },
+                });
+                (__VLS_ctx.formatTaskMetaSummary(data));
+            }
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock" },
                 ...{ class: ({ 'is-running': __VLS_ctx.isHeartbeatTask(data) }) },
             });
-            const __VLS_60 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_61 = __VLS_asFunctionalComponent(__VLS_60, new __VLS_60({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_62 = __VLS_61({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_61));
-            __VLS_63.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                 ...{ onClick: (...[$event]) => {
                         if (!(__VLS_ctx.activeSection === 'today'))
@@ -1444,82 +1497,94 @@ if (__VLS_ctx.activeSection === 'today') {
                 type: "button",
                 ...{ class: "task-run-toggle" },
             });
-            const __VLS_64 = {}.ElIcon;
+            const __VLS_60 = {}.ElIcon;
             /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_65 = __VLS_asFunctionalComponent(__VLS_64, new __VLS_64({}));
-            const __VLS_66 = __VLS_65({}, ...__VLS_functionalComponentArgsRest(__VLS_65));
-            __VLS_67.slots.default;
+            const __VLS_61 = __VLS_asFunctionalComponent(__VLS_60, new __VLS_60({}));
+            const __VLS_62 = __VLS_61({}, ...__VLS_functionalComponentArgsRest(__VLS_61));
+            __VLS_63.slots.default;
             if (__VLS_ctx.isHeartbeatTask(data)) {
-                const __VLS_68 = {}.VideoPause;
+                const __VLS_64 = {}.VideoPause;
                 /** @type {[typeof __VLS_components.VideoPause, ]} */ ;
+                // @ts-ignore
+                const __VLS_65 = __VLS_asFunctionalComponent(__VLS_64, new __VLS_64({}));
+                const __VLS_66 = __VLS_65({}, ...__VLS_functionalComponentArgsRest(__VLS_65));
+            }
+            else {
+                const __VLS_68 = {}.VideoPlay;
+                /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
                 // @ts-ignore
                 const __VLS_69 = __VLS_asFunctionalComponent(__VLS_68, new __VLS_68({}));
                 const __VLS_70 = __VLS_69({}, ...__VLS_functionalComponentArgsRest(__VLS_69));
             }
-            else {
-                const __VLS_72 = {}.VideoPlay;
-                /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
-                // @ts-ignore
-                const __VLS_73 = __VLS_asFunctionalComponent(__VLS_72, new __VLS_72({}));
-                const __VLS_74 = __VLS_73({}, ...__VLS_functionalComponentArgsRest(__VLS_73));
-            }
-            var __VLS_67;
             var __VLS_63;
-            const __VLS_76 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_77 = __VLS_asFunctionalComponent(__VLS_76, new __VLS_76({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_78 = __VLS_77({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_77));
-            __VLS_79.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock-bar" },
             });
-            const __VLS_80 = {}.ElProgress;
+            const __VLS_72 = {}.ElProgress;
             /** @type {[typeof __VLS_components.ElProgress, typeof __VLS_components.elProgress, ]} */ ;
             // @ts-ignore
-            const __VLS_81 = __VLS_asFunctionalComponent(__VLS_80, new __VLS_80({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_73 = __VLS_asFunctionalComponent(__VLS_72, new __VLS_72({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
-                strokeWidth: (4),
+                strokeWidth: (6),
                 color: ('#93c5fd'),
             }));
-            const __VLS_82 = __VLS_81({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_74 = __VLS_73({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
-                strokeWidth: (4),
+                strokeWidth: (6),
                 color: ('#93c5fd'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_81));
-            var __VLS_79;
-            if (__VLS_ctx.formatTaskMetaSummary(data)) {
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                    ...{ class: "task-node-meta task-node-meta-inline" },
-                });
-                (__VLS_ctx.formatTaskMetaSummary(data));
-            }
+            }, ...__VLS_functionalComponentArgsRest(__VLS_73));
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "clock-progress-text" },
+            });
+            (__VLS_ctx.clockLabel(data));
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-actions" },
             });
+            const __VLS_76 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_77 = __VLS_asFunctionalComponent(__VLS_76, new __VLS_76({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }));
+            const __VLS_78 = __VLS_77({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_77));
+            let __VLS_80;
+            let __VLS_81;
+            let __VLS_82;
+            const __VLS_83 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'today'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.toggleComplete(data);
+                }
+            };
+            __VLS_79.slots.default;
+            (data.isCompleted ? '撤回' : '完成');
+            var __VLS_79;
             const __VLS_84 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_85 = __VLS_asFunctionalComponent(__VLS_84, new __VLS_84({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                type: "primary",
             }));
             const __VLS_86 = __VLS_85({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                type: "primary",
             }, ...__VLS_functionalComponentArgsRest(__VLS_85));
             let __VLS_88;
             let __VLS_89;
@@ -1530,11 +1595,10 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openEditTaskDialog(data);
                 }
             };
             __VLS_87.slots.default;
-            (data.isCompleted ? '撤回' : '完成');
             var __VLS_87;
             const __VLS_92 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
@@ -1542,12 +1606,12 @@ if (__VLS_ctx.activeSection === 'today') {
             const __VLS_93 = __VLS_asFunctionalComponent(__VLS_92, new __VLS_92({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                ...{ class: "btn-subdivide" },
             }));
             const __VLS_94 = __VLS_93({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                ...{ class: "btn-subdivide" },
             }, ...__VLS_functionalComponentArgsRest(__VLS_93));
             let __VLS_96;
             let __VLS_97;
@@ -1558,7 +1622,7 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.openCreateTaskDialog(data);
                 }
             };
             __VLS_95.slots.default;
@@ -1569,12 +1633,12 @@ if (__VLS_ctx.activeSection === 'today') {
             const __VLS_101 = __VLS_asFunctionalComponent(__VLS_100, new __VLS_100({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: "btn-subdivide" },
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }));
             const __VLS_102 = __VLS_101({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: "btn-subdivide" },
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }, ...__VLS_functionalComponentArgsRest(__VLS_101));
             let __VLS_104;
             let __VLS_105;
@@ -1585,10 +1649,11 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openCreateTaskDialog(data);
+                    __VLS_ctx.toggleActive(data);
                 }
             };
             __VLS_103.slots.default;
+            (data.active ? '停用' : '启用');
             var __VLS_103;
             const __VLS_108 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
@@ -1596,12 +1661,12 @@ if (__VLS_ctx.activeSection === 'today') {
             const __VLS_109 = __VLS_asFunctionalComponent(__VLS_108, new __VLS_108({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
+                type: "danger",
             }));
             const __VLS_110 = __VLS_109({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
+                type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_109));
             let __VLS_112;
             let __VLS_113;
@@ -1612,39 +1677,11 @@ if (__VLS_ctx.activeSection === 'today') {
                         return;
                     if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleActive(data);
-                }
-            };
-            __VLS_111.slots.default;
-            (data.active ? '停用' : '启用');
-            var __VLS_111;
-            const __VLS_116 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_117 = __VLS_asFunctionalComponent(__VLS_116, new __VLS_116({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }));
-            const __VLS_118 = __VLS_117({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_117));
-            let __VLS_120;
-            let __VLS_121;
-            let __VLS_122;
-            const __VLS_123 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'today'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodayTree.length && !__VLS_ctx.loadingTasks))
-                        return;
                     __VLS_ctx.deleteTask(data);
                 }
             };
-            __VLS_119.slots.default;
-            var __VLS_119;
+            __VLS_111.slots.default;
+            var __VLS_111;
         }
         var __VLS_31;
     }
@@ -1653,52 +1690,52 @@ if (__VLS_ctx.activeSection === 'todo') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "section-toolbar section-toolbar-left" },
     });
-    const __VLS_124 = {}.ElButton;
+    const __VLS_116 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_125 = __VLS_asFunctionalComponent(__VLS_124, new __VLS_124({
+    const __VLS_117 = __VLS_asFunctionalComponent(__VLS_116, new __VLS_116({
         ...{ 'onClick': {} },
         type: "warning",
     }));
-    const __VLS_126 = __VLS_125({
+    const __VLS_118 = __VLS_117({
         ...{ 'onClick': {} },
         type: "warning",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_125));
-    let __VLS_128;
-    let __VLS_129;
-    let __VLS_130;
-    const __VLS_131 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_117));
+    let __VLS_120;
+    let __VLS_121;
+    let __VLS_122;
+    const __VLS_123 = {
         onClick: (...[$event]) => {
             if (!(__VLS_ctx.activeSection === 'todo'))
                 return;
             __VLS_ctx.openCreateTaskDialog();
         }
     };
-    __VLS_127.slots.default;
-    var __VLS_127;
-    const __VLS_132 = {}.ElButton;
+    __VLS_119.slots.default;
+    var __VLS_119;
+    const __VLS_124 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_133 = __VLS_asFunctionalComponent(__VLS_132, new __VLS_132({
+    const __VLS_125 = __VLS_asFunctionalComponent(__VLS_124, new __VLS_124({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
     }));
-    const __VLS_134 = __VLS_133({
+    const __VLS_126 = __VLS_125({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_133));
-    let __VLS_136;
-    let __VLS_137;
-    let __VLS_138;
-    const __VLS_139 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_125));
+    let __VLS_128;
+    let __VLS_129;
+    let __VLS_130;
+    const __VLS_131 = {
         onClick: (__VLS_ctx.loadTasks)
     };
-    __VLS_135.slots.default;
-    var __VLS_135;
+    __VLS_127.slots.default;
+    var __VLS_127;
 }
 if (__VLS_ctx.activeSection === 'todo') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.section, __VLS_intrinsicElements.section)({
@@ -1714,37 +1751,37 @@ if (__VLS_ctx.activeSection === 'todo') {
         ...{ class: "panel-head-title" },
     });
     if (!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks) {
-        const __VLS_140 = {}.ElEmpty;
+        const __VLS_132 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_141 = __VLS_asFunctionalComponent(__VLS_140, new __VLS_140({
+        const __VLS_133 = __VLS_asFunctionalComponent(__VLS_132, new __VLS_132({
             description: "当前没有今日待办",
         }));
-        const __VLS_142 = __VLS_141({
+        const __VLS_134 = __VLS_133({
             description: "当前没有今日待办",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_141));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_133));
     }
     else {
-        const __VLS_144 = {}.ElTree;
+        const __VLS_136 = {}.ElTree;
         /** @type {[typeof __VLS_components.ElTree, typeof __VLS_components.elTree, typeof __VLS_components.ElTree, typeof __VLS_components.elTree, ]} */ ;
         // @ts-ignore
-        const __VLS_145 = __VLS_asFunctionalComponent(__VLS_144, new __VLS_144({
+        const __VLS_137 = __VLS_asFunctionalComponent(__VLS_136, new __VLS_136({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.currentTodoTodayTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
         }));
-        const __VLS_146 = __VLS_145({
+        const __VLS_138 = __VLS_137({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.currentTodoTodayTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_145));
-        __VLS_147.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_137));
+        __VLS_139.slots.default;
         {
-            const { default: __VLS_thisSlot } = __VLS_147.slots;
+            const { default: __VLS_thisSlot } = __VLS_139.slots;
             const [{ data }] = __VLS_getSlotParams(__VLS_thisSlot);
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node" },
@@ -1763,97 +1800,91 @@ if (__VLS_ctx.activeSection === 'todo') {
                 ...{ class: "task-node-title-row" },
             });
             if (String(data.type) === '1') {
+                const __VLS_140 = {}.ElIcon;
+                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
+                // @ts-ignore
+                const __VLS_141 = __VLS_asFunctionalComponent(__VLS_140, new __VLS_140({
+                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                }));
+                const __VLS_142 = __VLS_141({
+                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                }, ...__VLS_functionalComponentArgsRest(__VLS_141));
+                __VLS_143.slots.default;
+                const __VLS_144 = {}.Clock;
+                /** @type {[typeof __VLS_components.Clock, ]} */ ;
+                // @ts-ignore
+                const __VLS_145 = __VLS_asFunctionalComponent(__VLS_144, new __VLS_144({}));
+                const __VLS_146 = __VLS_145({}, ...__VLS_functionalComponentArgsRest(__VLS_145));
+                var __VLS_143;
+            }
+            else if (String(data.type) === '2') {
                 const __VLS_148 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
                 const __VLS_149 = __VLS_asFunctionalComponent(__VLS_148, new __VLS_148({
-                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                    ...{ class: "task-type-icon task-type-icon-ddl" },
                 }));
                 const __VLS_150 = __VLS_149({
-                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                    ...{ class: "task-type-icon task-type-icon-ddl" },
                 }, ...__VLS_functionalComponentArgsRest(__VLS_149));
                 __VLS_151.slots.default;
-                const __VLS_152 = {}.Clock;
-                /** @type {[typeof __VLS_components.Clock, ]} */ ;
+                const __VLS_152 = {}.Calendar;
+                /** @type {[typeof __VLS_components.Calendar, ]} */ ;
                 // @ts-ignore
                 const __VLS_153 = __VLS_asFunctionalComponent(__VLS_152, new __VLS_152({}));
                 const __VLS_154 = __VLS_153({}, ...__VLS_functionalComponentArgsRest(__VLS_153));
                 var __VLS_151;
             }
-            else if (String(data.type) === '2') {
+            else {
                 const __VLS_156 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
                 const __VLS_157 = __VLS_asFunctionalComponent(__VLS_156, new __VLS_156({
-                    ...{ class: "task-type-icon task-type-icon-ddl" },
+                    ...{ class: "task-type-icon task-type-icon-note" },
                 }));
                 const __VLS_158 = __VLS_157({
-                    ...{ class: "task-type-icon task-type-icon-ddl" },
+                    ...{ class: "task-type-icon task-type-icon-note" },
                 }, ...__VLS_functionalComponentArgsRest(__VLS_157));
                 __VLS_159.slots.default;
-                const __VLS_160 = {}.Calendar;
-                /** @type {[typeof __VLS_components.Calendar, ]} */ ;
+                const __VLS_160 = {}.Document;
+                /** @type {[typeof __VLS_components.Document, ]} */ ;
                 // @ts-ignore
                 const __VLS_161 = __VLS_asFunctionalComponent(__VLS_160, new __VLS_160({}));
                 const __VLS_162 = __VLS_161({}, ...__VLS_functionalComponentArgsRest(__VLS_161));
                 var __VLS_159;
             }
-            else {
-                const __VLS_164 = {}.ElIcon;
-                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
-                // @ts-ignore
-                const __VLS_165 = __VLS_asFunctionalComponent(__VLS_164, new __VLS_164({
-                    ...{ class: "task-type-icon task-type-icon-note" },
-                }));
-                const __VLS_166 = __VLS_165({
-                    ...{ class: "task-type-icon task-type-icon-note" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_165));
-                __VLS_167.slots.default;
-                const __VLS_168 = {}.Document;
-                /** @type {[typeof __VLS_components.Document, ]} */ ;
-                // @ts-ignore
-                const __VLS_169 = __VLS_asFunctionalComponent(__VLS_168, new __VLS_168({}));
-                const __VLS_170 = __VLS_169({}, ...__VLS_functionalComponentArgsRest(__VLS_169));
-                var __VLS_167;
-            }
-            const __VLS_172 = {}.ElTooltip;
+            const __VLS_164 = {}.ElTooltip;
             /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
             // @ts-ignore
-            const __VLS_173 = __VLS_asFunctionalComponent(__VLS_172, new __VLS_172({
+            const __VLS_165 = __VLS_asFunctionalComponent(__VLS_164, new __VLS_164({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             }));
-            const __VLS_174 = __VLS_173({
+            const __VLS_166 = __VLS_165({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_173));
-            __VLS_175.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_165));
+            __VLS_167.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span)({
                 ...{ class: (['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]) },
                 role: "img",
                 'aria-label': (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             });
-            var __VLS_175;
+            var __VLS_167;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
                 ...{ class: "task-node-title" },
             });
             (data.title);
+            if (__VLS_ctx.formatTaskMetaSummary(data)) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-node-desc" },
+                });
+                (__VLS_ctx.formatTaskMetaSummary(data));
+            }
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock" },
                 ...{ class: ({ 'is-running': __VLS_ctx.isHeartbeatTask(data) }) },
             });
-            const __VLS_176 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_177 = __VLS_asFunctionalComponent(__VLS_176, new __VLS_176({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_178 = __VLS_177({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_177));
-            __VLS_179.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                 ...{ onClick: (...[$event]) => {
                         if (!(__VLS_ctx.activeSection === 'todo'))
@@ -1865,82 +1896,121 @@ if (__VLS_ctx.activeSection === 'todo') {
                 type: "button",
                 ...{ class: "task-run-toggle" },
             });
-            const __VLS_180 = {}.ElIcon;
+            const __VLS_168 = {}.ElIcon;
             /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_181 = __VLS_asFunctionalComponent(__VLS_180, new __VLS_180({}));
-            const __VLS_182 = __VLS_181({}, ...__VLS_functionalComponentArgsRest(__VLS_181));
-            __VLS_183.slots.default;
+            const __VLS_169 = __VLS_asFunctionalComponent(__VLS_168, new __VLS_168({}));
+            const __VLS_170 = __VLS_169({}, ...__VLS_functionalComponentArgsRest(__VLS_169));
+            __VLS_171.slots.default;
             if (__VLS_ctx.isHeartbeatTask(data)) {
-                const __VLS_184 = {}.VideoPause;
+                const __VLS_172 = {}.VideoPause;
                 /** @type {[typeof __VLS_components.VideoPause, ]} */ ;
                 // @ts-ignore
-                const __VLS_185 = __VLS_asFunctionalComponent(__VLS_184, new __VLS_184({}));
-                const __VLS_186 = __VLS_185({}, ...__VLS_functionalComponentArgsRest(__VLS_185));
+                const __VLS_173 = __VLS_asFunctionalComponent(__VLS_172, new __VLS_172({}));
+                const __VLS_174 = __VLS_173({}, ...__VLS_functionalComponentArgsRest(__VLS_173));
             }
             else {
-                const __VLS_188 = {}.VideoPlay;
+                const __VLS_176 = {}.VideoPlay;
                 /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
                 // @ts-ignore
-                const __VLS_189 = __VLS_asFunctionalComponent(__VLS_188, new __VLS_188({}));
-                const __VLS_190 = __VLS_189({}, ...__VLS_functionalComponentArgsRest(__VLS_189));
+                const __VLS_177 = __VLS_asFunctionalComponent(__VLS_176, new __VLS_176({}));
+                const __VLS_178 = __VLS_177({}, ...__VLS_functionalComponentArgsRest(__VLS_177));
             }
-            var __VLS_183;
-            var __VLS_179;
-            const __VLS_192 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_193 = __VLS_asFunctionalComponent(__VLS_192, new __VLS_192({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_194 = __VLS_193({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_193));
-            __VLS_195.slots.default;
+            var __VLS_171;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock-bar" },
             });
-            const __VLS_196 = {}.ElProgress;
+            const __VLS_180 = {}.ElProgress;
             /** @type {[typeof __VLS_components.ElProgress, typeof __VLS_components.elProgress, ]} */ ;
             // @ts-ignore
-            const __VLS_197 = __VLS_asFunctionalComponent(__VLS_196, new __VLS_196({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_181 = __VLS_asFunctionalComponent(__VLS_180, new __VLS_180({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
             }));
-            const __VLS_198 = __VLS_197({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_182 = __VLS_181({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_197));
-            var __VLS_195;
-            if (__VLS_ctx.formatTaskMetaSummary(data)) {
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                    ...{ class: "task-node-meta task-node-meta-inline" },
-                });
-                (__VLS_ctx.formatTaskMetaSummary(data));
-            }
+            }, ...__VLS_functionalComponentArgsRest(__VLS_181));
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "clock-progress-text" },
+            });
+            (__VLS_ctx.clockLabel(data));
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-actions" },
             });
+            const __VLS_184 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_185 = __VLS_asFunctionalComponent(__VLS_184, new __VLS_184({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }));
+            const __VLS_186 = __VLS_185({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_185));
+            let __VLS_188;
+            let __VLS_189;
+            let __VLS_190;
+            const __VLS_191 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'todo'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.toggleComplete(data);
+                }
+            };
+            __VLS_187.slots.default;
+            (data.isCompleted ? '撤回' : '完成');
+            var __VLS_187;
+            const __VLS_192 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_193 = __VLS_asFunctionalComponent(__VLS_192, new __VLS_192({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "primary",
+            }));
+            const __VLS_194 = __VLS_193({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "primary",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_193));
+            let __VLS_196;
+            let __VLS_197;
+            let __VLS_198;
+            const __VLS_199 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'todo'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.openEditTaskDialog(data);
+                }
+            };
+            __VLS_195.slots.default;
+            var __VLS_195;
             const __VLS_200 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_201 = __VLS_asFunctionalComponent(__VLS_200, new __VLS_200({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                ...{ class: "btn-subdivide" },
             }));
             const __VLS_202 = __VLS_201({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                ...{ class: "btn-subdivide" },
             }, ...__VLS_functionalComponentArgsRest(__VLS_201));
             let __VLS_204;
             let __VLS_205;
@@ -1951,11 +2021,10 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.openCreateTaskDialog(data);
                 }
             };
             __VLS_203.slots.default;
-            (data.isCompleted ? '撤回' : '完成');
             var __VLS_203;
             const __VLS_208 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
@@ -1963,12 +2032,12 @@ if (__VLS_ctx.activeSection === 'todo') {
             const __VLS_209 = __VLS_asFunctionalComponent(__VLS_208, new __VLS_208({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }));
             const __VLS_210 = __VLS_209({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }, ...__VLS_functionalComponentArgsRest(__VLS_209));
             let __VLS_212;
             let __VLS_213;
@@ -1979,10 +2048,11 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.toggleActive(data);
                 }
             };
             __VLS_211.slots.default;
+            (data.active ? '停用' : '启用');
             var __VLS_211;
             const __VLS_216 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
@@ -1990,12 +2060,12 @@ if (__VLS_ctx.activeSection === 'todo') {
             const __VLS_217 = __VLS_asFunctionalComponent(__VLS_216, new __VLS_216({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: "btn-subdivide" },
+                type: "danger",
             }));
             const __VLS_218 = __VLS_217({
                 ...{ 'onClick': {} },
                 size: "small",
-                ...{ class: "btn-subdivide" },
+                type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_217));
             let __VLS_220;
             let __VLS_221;
@@ -2006,68 +2076,13 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openCreateTaskDialog(data);
+                    __VLS_ctx.deleteTask(data);
                 }
             };
             __VLS_219.slots.default;
             var __VLS_219;
-            const __VLS_224 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_225 = __VLS_asFunctionalComponent(__VLS_224, new __VLS_224({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
-            }));
-            const __VLS_226 = __VLS_225({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_225));
-            let __VLS_228;
-            let __VLS_229;
-            let __VLS_230;
-            const __VLS_231 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'todo'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
-                        return;
-                    __VLS_ctx.toggleActive(data);
-                }
-            };
-            __VLS_227.slots.default;
-            (data.active ? '停用' : '启用');
-            var __VLS_227;
-            const __VLS_232 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_233 = __VLS_asFunctionalComponent(__VLS_232, new __VLS_232({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }));
-            const __VLS_234 = __VLS_233({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_233));
-            let __VLS_236;
-            let __VLS_237;
-            let __VLS_238;
-            const __VLS_239 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'todo'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodoTodayTree.length && !__VLS_ctx.loadingTasks))
-                        return;
-                    __VLS_ctx.deleteTask(data);
-                }
-            };
-            __VLS_235.slots.default;
-            var __VLS_235;
         }
-        var __VLS_147;
+        var __VLS_139;
     }
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "panel-card task-split-card" },
@@ -2079,37 +2094,37 @@ if (__VLS_ctx.activeSection === 'todo') {
         ...{ class: "panel-head-title" },
     });
     if (!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks) {
-        const __VLS_240 = {}.ElEmpty;
+        const __VLS_224 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_241 = __VLS_asFunctionalComponent(__VLS_240, new __VLS_240({
+        const __VLS_225 = __VLS_asFunctionalComponent(__VLS_224, new __VLS_224({
             description: "当前没有后续待办",
         }));
-        const __VLS_242 = __VLS_241({
+        const __VLS_226 = __VLS_225({
             description: "当前没有后续待办",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_241));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_225));
     }
     else {
-        const __VLS_244 = {}.ElTree;
+        const __VLS_228 = {}.ElTree;
         /** @type {[typeof __VLS_components.ElTree, typeof __VLS_components.elTree, typeof __VLS_components.ElTree, typeof __VLS_components.elTree, ]} */ ;
         // @ts-ignore
-        const __VLS_245 = __VLS_asFunctionalComponent(__VLS_244, new __VLS_244({
+        const __VLS_229 = __VLS_asFunctionalComponent(__VLS_228, new __VLS_228({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.currentTodoFutureTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
         }));
-        const __VLS_246 = __VLS_245({
+        const __VLS_230 = __VLS_229({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.currentTodoFutureTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_245));
-        __VLS_247.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_229));
+        __VLS_231.slots.default;
         {
-            const { default: __VLS_thisSlot } = __VLS_247.slots;
+            const { default: __VLS_thisSlot } = __VLS_231.slots;
             const [{ data }] = __VLS_getSlotParams(__VLS_thisSlot);
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node" },
@@ -2128,77 +2143,77 @@ if (__VLS_ctx.activeSection === 'todo') {
                 ...{ class: "task-node-title-row" },
             });
             if (String(data.type) === '1') {
+                const __VLS_232 = {}.ElIcon;
+                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
+                // @ts-ignore
+                const __VLS_233 = __VLS_asFunctionalComponent(__VLS_232, new __VLS_232({
+                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                }));
+                const __VLS_234 = __VLS_233({
+                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                }, ...__VLS_functionalComponentArgsRest(__VLS_233));
+                __VLS_235.slots.default;
+                const __VLS_236 = {}.Clock;
+                /** @type {[typeof __VLS_components.Clock, ]} */ ;
+                // @ts-ignore
+                const __VLS_237 = __VLS_asFunctionalComponent(__VLS_236, new __VLS_236({}));
+                const __VLS_238 = __VLS_237({}, ...__VLS_functionalComponentArgsRest(__VLS_237));
+                var __VLS_235;
+            }
+            else if (String(data.type) === '2') {
+                const __VLS_240 = {}.ElIcon;
+                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
+                // @ts-ignore
+                const __VLS_241 = __VLS_asFunctionalComponent(__VLS_240, new __VLS_240({
+                    ...{ class: "task-type-icon task-type-icon-ddl" },
+                }));
+                const __VLS_242 = __VLS_241({
+                    ...{ class: "task-type-icon task-type-icon-ddl" },
+                }, ...__VLS_functionalComponentArgsRest(__VLS_241));
+                __VLS_243.slots.default;
+                const __VLS_244 = {}.Calendar;
+                /** @type {[typeof __VLS_components.Calendar, ]} */ ;
+                // @ts-ignore
+                const __VLS_245 = __VLS_asFunctionalComponent(__VLS_244, new __VLS_244({}));
+                const __VLS_246 = __VLS_245({}, ...__VLS_functionalComponentArgsRest(__VLS_245));
+                var __VLS_243;
+            }
+            else {
                 const __VLS_248 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
                 const __VLS_249 = __VLS_asFunctionalComponent(__VLS_248, new __VLS_248({
-                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                    ...{ class: "task-type-icon task-type-icon-note" },
                 }));
                 const __VLS_250 = __VLS_249({
-                    ...{ class: "task-type-icon task-type-icon-recurring" },
+                    ...{ class: "task-type-icon task-type-icon-note" },
                 }, ...__VLS_functionalComponentArgsRest(__VLS_249));
                 __VLS_251.slots.default;
-                const __VLS_252 = {}.Clock;
-                /** @type {[typeof __VLS_components.Clock, ]} */ ;
+                const __VLS_252 = {}.Document;
+                /** @type {[typeof __VLS_components.Document, ]} */ ;
                 // @ts-ignore
                 const __VLS_253 = __VLS_asFunctionalComponent(__VLS_252, new __VLS_252({}));
                 const __VLS_254 = __VLS_253({}, ...__VLS_functionalComponentArgsRest(__VLS_253));
                 var __VLS_251;
             }
-            else if (String(data.type) === '2') {
-                const __VLS_256 = {}.ElIcon;
-                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
-                // @ts-ignore
-                const __VLS_257 = __VLS_asFunctionalComponent(__VLS_256, new __VLS_256({
-                    ...{ class: "task-type-icon task-type-icon-ddl" },
-                }));
-                const __VLS_258 = __VLS_257({
-                    ...{ class: "task-type-icon task-type-icon-ddl" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_257));
-                __VLS_259.slots.default;
-                const __VLS_260 = {}.Calendar;
-                /** @type {[typeof __VLS_components.Calendar, ]} */ ;
-                // @ts-ignore
-                const __VLS_261 = __VLS_asFunctionalComponent(__VLS_260, new __VLS_260({}));
-                const __VLS_262 = __VLS_261({}, ...__VLS_functionalComponentArgsRest(__VLS_261));
-                var __VLS_259;
-            }
-            else {
-                const __VLS_264 = {}.ElIcon;
-                /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
-                // @ts-ignore
-                const __VLS_265 = __VLS_asFunctionalComponent(__VLS_264, new __VLS_264({
-                    ...{ class: "task-type-icon task-type-icon-note" },
-                }));
-                const __VLS_266 = __VLS_265({
-                    ...{ class: "task-type-icon task-type-icon-note" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_265));
-                __VLS_267.slots.default;
-                const __VLS_268 = {}.Document;
-                /** @type {[typeof __VLS_components.Document, ]} */ ;
-                // @ts-ignore
-                const __VLS_269 = __VLS_asFunctionalComponent(__VLS_268, new __VLS_268({}));
-                const __VLS_270 = __VLS_269({}, ...__VLS_functionalComponentArgsRest(__VLS_269));
-                var __VLS_267;
-            }
-            const __VLS_272 = {}.ElTooltip;
+            const __VLS_256 = {}.ElTooltip;
             /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
             // @ts-ignore
-            const __VLS_273 = __VLS_asFunctionalComponent(__VLS_272, new __VLS_272({
+            const __VLS_257 = __VLS_asFunctionalComponent(__VLS_256, new __VLS_256({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             }));
-            const __VLS_274 = __VLS_273({
+            const __VLS_258 = __VLS_257({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_273));
-            __VLS_275.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_257));
+            __VLS_259.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span)({
                 ...{ class: (['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]) },
                 role: "img",
                 'aria-label': (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             });
-            var __VLS_275;
+            var __VLS_259;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
                 ...{ class: "task-node-title" },
             });
@@ -2207,18 +2222,6 @@ if (__VLS_ctx.activeSection === 'todo') {
                 ...{ class: "task-node-clock" },
                 ...{ class: ({ 'is-running': __VLS_ctx.isHeartbeatTask(data) }) },
             });
-            const __VLS_276 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_277 = __VLS_asFunctionalComponent(__VLS_276, new __VLS_276({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_278 = __VLS_277({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_277));
-            __VLS_279.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                 ...{ onClick: (...[$event]) => {
                         if (!(__VLS_ctx.activeSection === 'todo'))
@@ -2230,59 +2233,49 @@ if (__VLS_ctx.activeSection === 'todo') {
                 type: "button",
                 ...{ class: "task-run-toggle" },
             });
-            const __VLS_280 = {}.ElIcon;
+            const __VLS_260 = {}.ElIcon;
             /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_281 = __VLS_asFunctionalComponent(__VLS_280, new __VLS_280({}));
-            const __VLS_282 = __VLS_281({}, ...__VLS_functionalComponentArgsRest(__VLS_281));
-            __VLS_283.slots.default;
+            const __VLS_261 = __VLS_asFunctionalComponent(__VLS_260, new __VLS_260({}));
+            const __VLS_262 = __VLS_261({}, ...__VLS_functionalComponentArgsRest(__VLS_261));
+            __VLS_263.slots.default;
             if (__VLS_ctx.isHeartbeatTask(data)) {
-                const __VLS_284 = {}.VideoPause;
+                const __VLS_264 = {}.VideoPause;
                 /** @type {[typeof __VLS_components.VideoPause, ]} */ ;
                 // @ts-ignore
-                const __VLS_285 = __VLS_asFunctionalComponent(__VLS_284, new __VLS_284({}));
-                const __VLS_286 = __VLS_285({}, ...__VLS_functionalComponentArgsRest(__VLS_285));
+                const __VLS_265 = __VLS_asFunctionalComponent(__VLS_264, new __VLS_264({}));
+                const __VLS_266 = __VLS_265({}, ...__VLS_functionalComponentArgsRest(__VLS_265));
             }
             else {
-                const __VLS_288 = {}.VideoPlay;
+                const __VLS_268 = {}.VideoPlay;
                 /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
                 // @ts-ignore
-                const __VLS_289 = __VLS_asFunctionalComponent(__VLS_288, new __VLS_288({}));
-                const __VLS_290 = __VLS_289({}, ...__VLS_functionalComponentArgsRest(__VLS_289));
+                const __VLS_269 = __VLS_asFunctionalComponent(__VLS_268, new __VLS_268({}));
+                const __VLS_270 = __VLS_269({}, ...__VLS_functionalComponentArgsRest(__VLS_269));
             }
-            var __VLS_283;
-            var __VLS_279;
-            const __VLS_292 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_293 = __VLS_asFunctionalComponent(__VLS_292, new __VLS_292({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_294 = __VLS_293({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_293));
-            __VLS_295.slots.default;
+            var __VLS_263;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock-bar" },
             });
-            const __VLS_296 = {}.ElProgress;
+            const __VLS_272 = {}.ElProgress;
             /** @type {[typeof __VLS_components.ElProgress, typeof __VLS_components.elProgress, ]} */ ;
             // @ts-ignore
-            const __VLS_297 = __VLS_asFunctionalComponent(__VLS_296, new __VLS_296({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_273 = __VLS_asFunctionalComponent(__VLS_272, new __VLS_272({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
             }));
-            const __VLS_298 = __VLS_297({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_274 = __VLS_273({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_297));
-            var __VLS_295;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_273));
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "clock-progress-text" },
+            });
+            (__VLS_ctx.clockLabel(data));
             if (__VLS_ctx.formatTaskMetaSummary(data)) {
                 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                     ...{ class: "task-node-meta" },
@@ -2292,20 +2285,102 @@ if (__VLS_ctx.activeSection === 'todo') {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-actions" },
             });
+            const __VLS_276 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_277 = __VLS_asFunctionalComponent(__VLS_276, new __VLS_276({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }));
+            const __VLS_278 = __VLS_277({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "success",
+                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_277));
+            let __VLS_280;
+            let __VLS_281;
+            let __VLS_282;
+            const __VLS_283 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'todo'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.toggleComplete(data);
+                }
+            };
+            __VLS_279.slots.default;
+            (data.isCompleted ? '撤回' : '完成');
+            var __VLS_279;
+            const __VLS_284 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_285 = __VLS_asFunctionalComponent(__VLS_284, new __VLS_284({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "primary",
+            }));
+            const __VLS_286 = __VLS_285({
+                ...{ 'onClick': {} },
+                size: "small",
+                type: "primary",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_285));
+            let __VLS_288;
+            let __VLS_289;
+            let __VLS_290;
+            const __VLS_291 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'todo'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.openEditTaskDialog(data);
+                }
+            };
+            __VLS_287.slots.default;
+            var __VLS_287;
+            const __VLS_292 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_293 = __VLS_asFunctionalComponent(__VLS_292, new __VLS_292({
+                ...{ 'onClick': {} },
+                size: "small",
+                ...{ class: "btn-subdivide" },
+            }));
+            const __VLS_294 = __VLS_293({
+                ...{ 'onClick': {} },
+                size: "small",
+                ...{ class: "btn-subdivide" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_293));
+            let __VLS_296;
+            let __VLS_297;
+            let __VLS_298;
+            const __VLS_299 = {
+                onClick: (...[$event]) => {
+                    if (!(__VLS_ctx.activeSection === 'todo'))
+                        return;
+                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
+                        return;
+                    __VLS_ctx.openCreateTaskDialog(data);
+                }
+            };
+            __VLS_295.slots.default;
+            var __VLS_295;
             const __VLS_300 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
             const __VLS_301 = __VLS_asFunctionalComponent(__VLS_300, new __VLS_300({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }));
             const __VLS_302 = __VLS_301({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "success",
-                ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
+                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }, ...__VLS_functionalComponentArgsRest(__VLS_301));
             let __VLS_304;
             let __VLS_305;
@@ -2316,11 +2391,11 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.toggleComplete(data);
+                    __VLS_ctx.toggleActive(data);
                 }
             };
             __VLS_303.slots.default;
-            (data.isCompleted ? '撤回' : '完成');
+            (data.active ? '停用' : '启用');
             var __VLS_303;
             const __VLS_308 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
@@ -2328,12 +2403,12 @@ if (__VLS_ctx.activeSection === 'todo') {
             const __VLS_309 = __VLS_asFunctionalComponent(__VLS_308, new __VLS_308({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                type: "danger",
             }));
             const __VLS_310 = __VLS_309({
                 ...{ 'onClick': {} },
                 size: "small",
-                type: "primary",
+                type: "danger",
             }, ...__VLS_functionalComponentArgsRest(__VLS_309));
             let __VLS_312;
             let __VLS_313;
@@ -2344,95 +2419,13 @@ if (__VLS_ctx.activeSection === 'todo') {
                         return;
                     if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
                         return;
-                    __VLS_ctx.openEditTaskDialog(data);
+                    __VLS_ctx.deleteTask(data);
                 }
             };
             __VLS_311.slots.default;
             var __VLS_311;
-            const __VLS_316 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_317 = __VLS_asFunctionalComponent(__VLS_316, new __VLS_316({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: "btn-subdivide" },
-            }));
-            const __VLS_318 = __VLS_317({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: "btn-subdivide" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_317));
-            let __VLS_320;
-            let __VLS_321;
-            let __VLS_322;
-            const __VLS_323 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'todo'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
-                        return;
-                    __VLS_ctx.openCreateTaskDialog(data);
-                }
-            };
-            __VLS_319.slots.default;
-            var __VLS_319;
-            const __VLS_324 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_325 = __VLS_asFunctionalComponent(__VLS_324, new __VLS_324({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
-            }));
-            const __VLS_326 = __VLS_325({
-                ...{ 'onClick': {} },
-                size: "small",
-                ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_325));
-            let __VLS_328;
-            let __VLS_329;
-            let __VLS_330;
-            const __VLS_331 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'todo'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
-                        return;
-                    __VLS_ctx.toggleActive(data);
-                }
-            };
-            __VLS_327.slots.default;
-            (data.active ? '停用' : '启用');
-            var __VLS_327;
-            const __VLS_332 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_333 = __VLS_asFunctionalComponent(__VLS_332, new __VLS_332({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }));
-            const __VLS_334 = __VLS_333({
-                ...{ 'onClick': {} },
-                size: "small",
-                type: "danger",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_333));
-            let __VLS_336;
-            let __VLS_337;
-            let __VLS_338;
-            const __VLS_339 = {
-                onClick: (...[$event]) => {
-                    if (!(__VLS_ctx.activeSection === 'todo'))
-                        return;
-                    if (!!(!__VLS_ctx.currentTodoFutureTree.length && !__VLS_ctx.loadingTasks))
-                        return;
-                    __VLS_ctx.deleteTask(data);
-                }
-            };
-            __VLS_335.slots.default;
-            var __VLS_335;
         }
-        var __VLS_247;
+        var __VLS_231;
     }
 }
 else if (__VLS_ctx.activeSection === 'all') {
@@ -2451,21 +2444,21 @@ else if (__VLS_ctx.activeSection === 'all') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "panel-head-actions" },
     });
-    const __VLS_340 = {}.ElButton;
+    const __VLS_316 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_341 = __VLS_asFunctionalComponent(__VLS_340, new __VLS_340({
+    const __VLS_317 = __VLS_asFunctionalComponent(__VLS_316, new __VLS_316({
         ...{ 'onClick': {} },
         type: "warning",
     }));
-    const __VLS_342 = __VLS_341({
+    const __VLS_318 = __VLS_317({
         ...{ 'onClick': {} },
         type: "warning",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_341));
-    let __VLS_344;
-    let __VLS_345;
-    let __VLS_346;
-    const __VLS_347 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_317));
+    let __VLS_320;
+    let __VLS_321;
+    let __VLS_322;
+    const __VLS_323 = {
         onClick: (...[$event]) => {
             if (!!(__VLS_ctx.activeSection === 'todo'))
                 return;
@@ -2474,63 +2467,63 @@ else if (__VLS_ctx.activeSection === 'all') {
             __VLS_ctx.openCreateSceneDialog();
         }
     };
-    __VLS_343.slots.default;
-    var __VLS_343;
-    const __VLS_348 = {}.ElButton;
+    __VLS_319.slots.default;
+    var __VLS_319;
+    const __VLS_324 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_349 = __VLS_asFunctionalComponent(__VLS_348, new __VLS_348({
+    const __VLS_325 = __VLS_asFunctionalComponent(__VLS_324, new __VLS_324({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
     }));
-    const __VLS_350 = __VLS_349({
+    const __VLS_326 = __VLS_325({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_349));
-    let __VLS_352;
-    let __VLS_353;
-    let __VLS_354;
-    const __VLS_355 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_325));
+    let __VLS_328;
+    let __VLS_329;
+    let __VLS_330;
+    const __VLS_331 = {
         onClick: (__VLS_ctx.loadTasks)
     };
-    __VLS_351.slots.default;
-    var __VLS_351;
+    __VLS_327.slots.default;
+    var __VLS_327;
     if (!__VLS_ctx.sceneTaskTree.length && !__VLS_ctx.loadingTasks) {
-        const __VLS_356 = {}.ElEmpty;
+        const __VLS_332 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_357 = __VLS_asFunctionalComponent(__VLS_356, new __VLS_356({
+        const __VLS_333 = __VLS_asFunctionalComponent(__VLS_332, new __VLS_332({
             description: "当前没有场景",
         }));
-        const __VLS_358 = __VLS_357({
+        const __VLS_334 = __VLS_333({
             description: "当前没有场景",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_357));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_333));
     }
     else {
-        const __VLS_360 = {}.ElTree;
+        const __VLS_336 = {}.ElTree;
         /** @type {[typeof __VLS_components.ElTree, typeof __VLS_components.elTree, typeof __VLS_components.ElTree, typeof __VLS_components.elTree, ]} */ ;
         // @ts-ignore
-        const __VLS_361 = __VLS_asFunctionalComponent(__VLS_360, new __VLS_360({
+        const __VLS_337 = __VLS_asFunctionalComponent(__VLS_336, new __VLS_336({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.sceneTaskTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
         }));
-        const __VLS_362 = __VLS_361({
+        const __VLS_338 = __VLS_337({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.sceneTaskTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_361));
-        __VLS_363.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_337));
+        __VLS_339.slots.default;
         {
-            const { default: __VLS_thisSlot } = __VLS_363.slots;
+            const { default: __VLS_thisSlot } = __VLS_339.slots;
             const [{ data }] = __VLS_getSlotParams(__VLS_thisSlot);
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node" },
@@ -2551,98 +2544,104 @@ else if (__VLS_ctx.activeSection === 'all') {
                 ...{ class: "task-node-title-row" },
             });
             if (String(data.type) === '1') {
-                const __VLS_364 = {}.ElIcon;
+                const __VLS_340 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_365 = __VLS_asFunctionalComponent(__VLS_364, new __VLS_364({
+                const __VLS_341 = __VLS_asFunctionalComponent(__VLS_340, new __VLS_340({
                     ...{ class: "task-type-icon task-type-icon-recurring" },
                 }));
-                const __VLS_366 = __VLS_365({
+                const __VLS_342 = __VLS_341({
                     ...{ class: "task-type-icon task-type-icon-recurring" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_365));
-                __VLS_367.slots.default;
-                const __VLS_368 = {}.Clock;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_341));
+                __VLS_343.slots.default;
+                const __VLS_344 = {}.Clock;
                 /** @type {[typeof __VLS_components.Clock, ]} */ ;
                 // @ts-ignore
-                const __VLS_369 = __VLS_asFunctionalComponent(__VLS_368, new __VLS_368({}));
-                const __VLS_370 = __VLS_369({}, ...__VLS_functionalComponentArgsRest(__VLS_369));
-                var __VLS_367;
+                const __VLS_345 = __VLS_asFunctionalComponent(__VLS_344, new __VLS_344({}));
+                const __VLS_346 = __VLS_345({}, ...__VLS_functionalComponentArgsRest(__VLS_345));
+                var __VLS_343;
             }
             else if (String(data.type) === '2') {
-                const __VLS_372 = {}.ElIcon;
+                const __VLS_348 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_373 = __VLS_asFunctionalComponent(__VLS_372, new __VLS_372({
+                const __VLS_349 = __VLS_asFunctionalComponent(__VLS_348, new __VLS_348({
                     ...{ class: "task-type-icon task-type-icon-ddl" },
                 }));
-                const __VLS_374 = __VLS_373({
+                const __VLS_350 = __VLS_349({
                     ...{ class: "task-type-icon task-type-icon-ddl" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_373));
-                __VLS_375.slots.default;
-                const __VLS_376 = {}.Calendar;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_349));
+                __VLS_351.slots.default;
+                const __VLS_352 = {}.Calendar;
                 /** @type {[typeof __VLS_components.Calendar, ]} */ ;
                 // @ts-ignore
-                const __VLS_377 = __VLS_asFunctionalComponent(__VLS_376, new __VLS_376({}));
-                const __VLS_378 = __VLS_377({}, ...__VLS_functionalComponentArgsRest(__VLS_377));
-                var __VLS_375;
+                const __VLS_353 = __VLS_asFunctionalComponent(__VLS_352, new __VLS_352({}));
+                const __VLS_354 = __VLS_353({}, ...__VLS_functionalComponentArgsRest(__VLS_353));
+                var __VLS_351;
             }
             else {
-                const __VLS_380 = {}.ElIcon;
+                const __VLS_356 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_381 = __VLS_asFunctionalComponent(__VLS_380, new __VLS_380({
+                const __VLS_357 = __VLS_asFunctionalComponent(__VLS_356, new __VLS_356({
                     ...{ class: "task-type-icon task-type-icon-note" },
                 }));
-                const __VLS_382 = __VLS_381({
+                const __VLS_358 = __VLS_357({
                     ...{ class: "task-type-icon task-type-icon-note" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_381));
-                __VLS_383.slots.default;
-                const __VLS_384 = {}.Document;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_357));
+                __VLS_359.slots.default;
+                const __VLS_360 = {}.Document;
                 /** @type {[typeof __VLS_components.Document, ]} */ ;
                 // @ts-ignore
-                const __VLS_385 = __VLS_asFunctionalComponent(__VLS_384, new __VLS_384({}));
-                const __VLS_386 = __VLS_385({}, ...__VLS_functionalComponentArgsRest(__VLS_385));
-                var __VLS_383;
+                const __VLS_361 = __VLS_asFunctionalComponent(__VLS_360, new __VLS_360({}));
+                const __VLS_362 = __VLS_361({}, ...__VLS_functionalComponentArgsRest(__VLS_361));
+                var __VLS_359;
             }
-            const __VLS_388 = {}.ElTooltip;
+            const __VLS_364 = {}.ElTooltip;
             /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
             // @ts-ignore
-            const __VLS_389 = __VLS_asFunctionalComponent(__VLS_388, new __VLS_388({
+            const __VLS_365 = __VLS_asFunctionalComponent(__VLS_364, new __VLS_364({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             }));
-            const __VLS_390 = __VLS_389({
+            const __VLS_366 = __VLS_365({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_389));
-            __VLS_391.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_365));
+            __VLS_367.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span)({
                 ...{ class: (['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]) },
                 role: "img",
                 'aria-label': (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             });
-            var __VLS_391;
+            var __VLS_367;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
                 ...{ class: "task-node-title" },
             });
             (data.title);
-            const __VLS_392 = {}.ElButton;
+            if (__VLS_ctx.formatTaskMetaSummary(data)) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-node-desc" },
+                });
+                (__VLS_ctx.formatTaskMetaSummary(data));
+            }
+            const __VLS_368 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_393 = __VLS_asFunctionalComponent(__VLS_392, new __VLS_392({
+            const __VLS_369 = __VLS_asFunctionalComponent(__VLS_368, new __VLS_368({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: "btn-subdivide" },
             }));
-            const __VLS_394 = __VLS_393({
+            const __VLS_370 = __VLS_369({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: "btn-subdivide" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_393));
-            let __VLS_396;
-            let __VLS_397;
-            let __VLS_398;
-            const __VLS_399 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_369));
+            let __VLS_372;
+            let __VLS_373;
+            let __VLS_374;
+            const __VLS_375 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -2653,24 +2652,12 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.openCreateTaskDialog(data, false);
                 }
             };
-            __VLS_395.slots.default;
-            var __VLS_395;
+            __VLS_371.slots.default;
+            var __VLS_371;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock" },
                 ...{ class: ({ 'is-running': __VLS_ctx.isHeartbeatTask(data) }) },
             });
-            const __VLS_400 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_401 = __VLS_asFunctionalComponent(__VLS_400, new __VLS_400({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_402 = __VLS_401({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_401));
-            __VLS_403.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                 ...{ onClick: (...[$event]) => {
                         if (!!(__VLS_ctx.activeSection === 'todo'))
@@ -2684,87 +2671,71 @@ else if (__VLS_ctx.activeSection === 'all') {
                 type: "button",
                 ...{ class: "task-run-toggle" },
             });
-            const __VLS_404 = {}.ElIcon;
+            const __VLS_376 = {}.ElIcon;
             /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_405 = __VLS_asFunctionalComponent(__VLS_404, new __VLS_404({}));
-            const __VLS_406 = __VLS_405({}, ...__VLS_functionalComponentArgsRest(__VLS_405));
-            __VLS_407.slots.default;
+            const __VLS_377 = __VLS_asFunctionalComponent(__VLS_376, new __VLS_376({}));
+            const __VLS_378 = __VLS_377({}, ...__VLS_functionalComponentArgsRest(__VLS_377));
+            __VLS_379.slots.default;
             if (__VLS_ctx.isHeartbeatTask(data)) {
-                const __VLS_408 = {}.VideoPause;
+                const __VLS_380 = {}.VideoPause;
                 /** @type {[typeof __VLS_components.VideoPause, ]} */ ;
                 // @ts-ignore
-                const __VLS_409 = __VLS_asFunctionalComponent(__VLS_408, new __VLS_408({}));
-                const __VLS_410 = __VLS_409({}, ...__VLS_functionalComponentArgsRest(__VLS_409));
+                const __VLS_381 = __VLS_asFunctionalComponent(__VLS_380, new __VLS_380({}));
+                const __VLS_382 = __VLS_381({}, ...__VLS_functionalComponentArgsRest(__VLS_381));
             }
             else {
-                const __VLS_412 = {}.VideoPlay;
+                const __VLS_384 = {}.VideoPlay;
                 /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
                 // @ts-ignore
-                const __VLS_413 = __VLS_asFunctionalComponent(__VLS_412, new __VLS_412({}));
-                const __VLS_414 = __VLS_413({}, ...__VLS_functionalComponentArgsRest(__VLS_413));
+                const __VLS_385 = __VLS_asFunctionalComponent(__VLS_384, new __VLS_384({}));
+                const __VLS_386 = __VLS_385({}, ...__VLS_functionalComponentArgsRest(__VLS_385));
             }
-            var __VLS_407;
-            var __VLS_403;
-            const __VLS_416 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_417 = __VLS_asFunctionalComponent(__VLS_416, new __VLS_416({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_418 = __VLS_417({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_417));
-            __VLS_419.slots.default;
+            var __VLS_379;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock-bar" },
             });
-            const __VLS_420 = {}.ElProgress;
+            const __VLS_388 = {}.ElProgress;
             /** @type {[typeof __VLS_components.ElProgress, typeof __VLS_components.elProgress, ]} */ ;
             // @ts-ignore
-            const __VLS_421 = __VLS_asFunctionalComponent(__VLS_420, new __VLS_420({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_389 = __VLS_asFunctionalComponent(__VLS_388, new __VLS_388({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
             }));
-            const __VLS_422 = __VLS_421({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_390 = __VLS_389({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_421));
-            var __VLS_419;
-            if (__VLS_ctx.formatTaskMetaSummary(data)) {
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                    ...{ class: "task-node-meta task-node-meta-inline" },
-                });
-                (__VLS_ctx.formatTaskMetaSummary(data));
-            }
+            }, ...__VLS_functionalComponentArgsRest(__VLS_389));
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "clock-progress-text" },
+            });
+            (__VLS_ctx.clockLabel(data));
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-actions" },
             });
-            const __VLS_424 = {}.ElButton;
+            const __VLS_392 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_425 = __VLS_asFunctionalComponent(__VLS_424, new __VLS_424({
+            const __VLS_393 = __VLS_asFunctionalComponent(__VLS_392, new __VLS_392({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "success",
                 ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
             }));
-            const __VLS_426 = __VLS_425({
+            const __VLS_394 = __VLS_393({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "success",
                 ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_425));
-            let __VLS_428;
-            let __VLS_429;
-            let __VLS_430;
-            const __VLS_431 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_393));
+            let __VLS_396;
+            let __VLS_397;
+            let __VLS_398;
+            const __VLS_399 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -2775,26 +2746,26 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.toggleComplete(data);
                 }
             };
-            __VLS_427.slots.default;
+            __VLS_395.slots.default;
             (data.isCompleted ? '撤回' : '完成');
-            var __VLS_427;
-            const __VLS_432 = {}.ElButton;
+            var __VLS_395;
+            const __VLS_400 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_433 = __VLS_asFunctionalComponent(__VLS_432, new __VLS_432({
+            const __VLS_401 = __VLS_asFunctionalComponent(__VLS_400, new __VLS_400({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: (data.active ? 'warning' : 'primary'),
             }));
-            const __VLS_434 = __VLS_433({
+            const __VLS_402 = __VLS_401({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: (data.active ? 'warning' : 'primary'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_433));
-            let __VLS_436;
-            let __VLS_437;
-            let __VLS_438;
-            const __VLS_439 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_401));
+            let __VLS_404;
+            let __VLS_405;
+            let __VLS_406;
+            const __VLS_407 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -2805,26 +2776,26 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.toggleActive(data);
                 }
             };
-            __VLS_435.slots.default;
+            __VLS_403.slots.default;
             (data.active ? '停用' : '启用');
-            var __VLS_435;
-            const __VLS_440 = {}.ElButton;
+            var __VLS_403;
+            const __VLS_408 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_441 = __VLS_asFunctionalComponent(__VLS_440, new __VLS_440({
+            const __VLS_409 = __VLS_asFunctionalComponent(__VLS_408, new __VLS_408({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "primary",
             }));
-            const __VLS_442 = __VLS_441({
+            const __VLS_410 = __VLS_409({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "primary",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_441));
-            let __VLS_444;
-            let __VLS_445;
-            let __VLS_446;
-            const __VLS_447 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_409));
+            let __VLS_412;
+            let __VLS_413;
+            let __VLS_414;
+            const __VLS_415 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -2835,25 +2806,25 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.openEditTaskDialog(data);
                 }
             };
-            __VLS_443.slots.default;
-            var __VLS_443;
-            const __VLS_448 = {}.ElButton;
+            __VLS_411.slots.default;
+            var __VLS_411;
+            const __VLS_416 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_449 = __VLS_asFunctionalComponent(__VLS_448, new __VLS_448({
+            const __VLS_417 = __VLS_asFunctionalComponent(__VLS_416, new __VLS_416({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "danger",
             }));
-            const __VLS_450 = __VLS_449({
+            const __VLS_418 = __VLS_417({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "danger",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_449));
-            let __VLS_452;
-            let __VLS_453;
-            let __VLS_454;
-            const __VLS_455 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_417));
+            let __VLS_420;
+            let __VLS_421;
+            let __VLS_422;
+            const __VLS_423 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -2864,10 +2835,10 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.deleteTask(data);
                 }
             };
-            __VLS_451.slots.default;
-            var __VLS_451;
+            __VLS_419.slots.default;
+            var __VLS_419;
         }
-        var __VLS_363;
+        var __VLS_339;
     }
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "panel-card task-split-card" },
@@ -2881,21 +2852,21 @@ else if (__VLS_ctx.activeSection === 'all') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "panel-head-actions" },
     });
-    const __VLS_456 = {}.ElButton;
+    const __VLS_424 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_457 = __VLS_asFunctionalComponent(__VLS_456, new __VLS_456({
+    const __VLS_425 = __VLS_asFunctionalComponent(__VLS_424, new __VLS_424({
         ...{ 'onClick': {} },
         type: "warning",
     }));
-    const __VLS_458 = __VLS_457({
+    const __VLS_426 = __VLS_425({
         ...{ 'onClick': {} },
         type: "warning",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_457));
-    let __VLS_460;
-    let __VLS_461;
-    let __VLS_462;
-    const __VLS_463 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_425));
+    let __VLS_428;
+    let __VLS_429;
+    let __VLS_430;
+    const __VLS_431 = {
         onClick: (...[$event]) => {
             if (!!(__VLS_ctx.activeSection === 'todo'))
                 return;
@@ -2904,63 +2875,63 @@ else if (__VLS_ctx.activeSection === 'all') {
             __VLS_ctx.openCreateTaskDialog(null, false);
         }
     };
-    __VLS_459.slots.default;
-    var __VLS_459;
-    const __VLS_464 = {}.ElButton;
+    __VLS_427.slots.default;
+    var __VLS_427;
+    const __VLS_432 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_465 = __VLS_asFunctionalComponent(__VLS_464, new __VLS_464({
+    const __VLS_433 = __VLS_asFunctionalComponent(__VLS_432, new __VLS_432({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
     }));
-    const __VLS_466 = __VLS_465({
+    const __VLS_434 = __VLS_433({
         ...{ 'onClick': {} },
         type: "warning",
         plain: true,
         loading: (__VLS_ctx.loadingTasks),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_465));
-    let __VLS_468;
-    let __VLS_469;
-    let __VLS_470;
-    const __VLS_471 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_433));
+    let __VLS_436;
+    let __VLS_437;
+    let __VLS_438;
+    const __VLS_439 = {
         onClick: (__VLS_ctx.loadTasks)
     };
-    __VLS_467.slots.default;
-    var __VLS_467;
+    __VLS_435.slots.default;
+    var __VLS_435;
     if (!__VLS_ctx.nonSceneTaskTree.length && !__VLS_ctx.loadingTasks) {
-        const __VLS_472 = {}.ElEmpty;
+        const __VLS_440 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_473 = __VLS_asFunctionalComponent(__VLS_472, new __VLS_472({
+        const __VLS_441 = __VLS_asFunctionalComponent(__VLS_440, new __VLS_440({
             description: "当前没有非场景任务",
         }));
-        const __VLS_474 = __VLS_473({
+        const __VLS_442 = __VLS_441({
             description: "当前没有非场景任务",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_473));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_441));
     }
     else {
-        const __VLS_476 = {}.ElTree;
+        const __VLS_444 = {}.ElTree;
         /** @type {[typeof __VLS_components.ElTree, typeof __VLS_components.elTree, typeof __VLS_components.ElTree, typeof __VLS_components.elTree, ]} */ ;
         // @ts-ignore
-        const __VLS_477 = __VLS_asFunctionalComponent(__VLS_476, new __VLS_476({
+        const __VLS_445 = __VLS_asFunctionalComponent(__VLS_444, new __VLS_444({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.nonSceneTaskTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
         }));
-        const __VLS_478 = __VLS_477({
+        const __VLS_446 = __VLS_445({
             ...{ class: "task-tree" },
             data: (__VLS_ctx.nonSceneTaskTree),
             nodeKey: "taskId",
             props: (__VLS_ctx.treeProps),
             expandOnClickNode: (false),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_477));
-        __VLS_479.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_445));
+        __VLS_447.slots.default;
         {
-            const { default: __VLS_thisSlot } = __VLS_479.slots;
+            const { default: __VLS_thisSlot } = __VLS_447.slots;
             const [{ data }] = __VLS_getSlotParams(__VLS_thisSlot);
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node" },
@@ -2981,97 +2952,91 @@ else if (__VLS_ctx.activeSection === 'all') {
                 ...{ class: "task-node-title-row" },
             });
             if (String(data.type) === '1') {
-                const __VLS_480 = {}.ElIcon;
+                const __VLS_448 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_481 = __VLS_asFunctionalComponent(__VLS_480, new __VLS_480({
+                const __VLS_449 = __VLS_asFunctionalComponent(__VLS_448, new __VLS_448({
                     ...{ class: "task-type-icon task-type-icon-recurring" },
                 }));
-                const __VLS_482 = __VLS_481({
+                const __VLS_450 = __VLS_449({
                     ...{ class: "task-type-icon task-type-icon-recurring" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_481));
-                __VLS_483.slots.default;
-                const __VLS_484 = {}.Clock;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_449));
+                __VLS_451.slots.default;
+                const __VLS_452 = {}.Clock;
                 /** @type {[typeof __VLS_components.Clock, ]} */ ;
                 // @ts-ignore
-                const __VLS_485 = __VLS_asFunctionalComponent(__VLS_484, new __VLS_484({}));
-                const __VLS_486 = __VLS_485({}, ...__VLS_functionalComponentArgsRest(__VLS_485));
-                var __VLS_483;
+                const __VLS_453 = __VLS_asFunctionalComponent(__VLS_452, new __VLS_452({}));
+                const __VLS_454 = __VLS_453({}, ...__VLS_functionalComponentArgsRest(__VLS_453));
+                var __VLS_451;
             }
             else if (String(data.type) === '2') {
-                const __VLS_488 = {}.ElIcon;
+                const __VLS_456 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_489 = __VLS_asFunctionalComponent(__VLS_488, new __VLS_488({
+                const __VLS_457 = __VLS_asFunctionalComponent(__VLS_456, new __VLS_456({
                     ...{ class: "task-type-icon task-type-icon-ddl" },
                 }));
-                const __VLS_490 = __VLS_489({
+                const __VLS_458 = __VLS_457({
                     ...{ class: "task-type-icon task-type-icon-ddl" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_489));
-                __VLS_491.slots.default;
-                const __VLS_492 = {}.Calendar;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_457));
+                __VLS_459.slots.default;
+                const __VLS_460 = {}.Calendar;
                 /** @type {[typeof __VLS_components.Calendar, ]} */ ;
                 // @ts-ignore
-                const __VLS_493 = __VLS_asFunctionalComponent(__VLS_492, new __VLS_492({}));
-                const __VLS_494 = __VLS_493({}, ...__VLS_functionalComponentArgsRest(__VLS_493));
-                var __VLS_491;
+                const __VLS_461 = __VLS_asFunctionalComponent(__VLS_460, new __VLS_460({}));
+                const __VLS_462 = __VLS_461({}, ...__VLS_functionalComponentArgsRest(__VLS_461));
+                var __VLS_459;
             }
             else {
-                const __VLS_496 = {}.ElIcon;
+                const __VLS_464 = {}.ElIcon;
                 /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
                 // @ts-ignore
-                const __VLS_497 = __VLS_asFunctionalComponent(__VLS_496, new __VLS_496({
+                const __VLS_465 = __VLS_asFunctionalComponent(__VLS_464, new __VLS_464({
                     ...{ class: "task-type-icon task-type-icon-note" },
                 }));
-                const __VLS_498 = __VLS_497({
+                const __VLS_466 = __VLS_465({
                     ...{ class: "task-type-icon task-type-icon-note" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_497));
-                __VLS_499.slots.default;
-                const __VLS_500 = {}.Document;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_465));
+                __VLS_467.slots.default;
+                const __VLS_468 = {}.Document;
                 /** @type {[typeof __VLS_components.Document, ]} */ ;
                 // @ts-ignore
-                const __VLS_501 = __VLS_asFunctionalComponent(__VLS_500, new __VLS_500({}));
-                const __VLS_502 = __VLS_501({}, ...__VLS_functionalComponentArgsRest(__VLS_501));
-                var __VLS_499;
+                const __VLS_469 = __VLS_asFunctionalComponent(__VLS_468, new __VLS_468({}));
+                const __VLS_470 = __VLS_469({}, ...__VLS_functionalComponentArgsRest(__VLS_469));
+                var __VLS_467;
             }
-            const __VLS_504 = {}.ElTooltip;
+            const __VLS_472 = {}.ElTooltip;
             /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
             // @ts-ignore
-            const __VLS_505 = __VLS_asFunctionalComponent(__VLS_504, new __VLS_504({
+            const __VLS_473 = __VLS_asFunctionalComponent(__VLS_472, new __VLS_472({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             }));
-            const __VLS_506 = __VLS_505({
+            const __VLS_474 = __VLS_473({
                 placement: "top",
                 content: (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_505));
-            __VLS_507.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_473));
+            __VLS_475.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span)({
                 ...{ class: (['active-dot', { 'dot-completed': data.isCompleted, 'dot-inactive': !data.active && !data.isCompleted, 'dot-pending': !data.isCompleted && data.active }]) },
                 role: "img",
                 'aria-label': (data.isCompleted ? '已完成' : (!data.active ? '未激活' : '未完成')),
             });
-            var __VLS_507;
+            var __VLS_475;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
                 ...{ class: "task-node-title" },
             });
             (data.title);
+            if (__VLS_ctx.formatTaskMetaSummary(data)) {
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-node-desc" },
+                });
+                (__VLS_ctx.formatTaskMetaSummary(data));
+            }
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock" },
                 ...{ class: ({ 'is-running': __VLS_ctx.isHeartbeatTask(data) }) },
             });
-            const __VLS_508 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_509 = __VLS_asFunctionalComponent(__VLS_508, new __VLS_508({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_510 = __VLS_509({
-                content: (__VLS_ctx.runStatusTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_509));
-            __VLS_511.slots.default;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.button, __VLS_intrinsicElements.button)({
                 ...{ onClick: (...[$event]) => {
                         if (!!(__VLS_ctx.activeSection === 'todo'))
@@ -3085,87 +3050,71 @@ else if (__VLS_ctx.activeSection === 'all') {
                 type: "button",
                 ...{ class: "task-run-toggle" },
             });
-            const __VLS_512 = {}.ElIcon;
+            const __VLS_476 = {}.ElIcon;
             /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
             // @ts-ignore
-            const __VLS_513 = __VLS_asFunctionalComponent(__VLS_512, new __VLS_512({}));
-            const __VLS_514 = __VLS_513({}, ...__VLS_functionalComponentArgsRest(__VLS_513));
-            __VLS_515.slots.default;
+            const __VLS_477 = __VLS_asFunctionalComponent(__VLS_476, new __VLS_476({}));
+            const __VLS_478 = __VLS_477({}, ...__VLS_functionalComponentArgsRest(__VLS_477));
+            __VLS_479.slots.default;
             if (__VLS_ctx.isHeartbeatTask(data)) {
-                const __VLS_516 = {}.VideoPause;
+                const __VLS_480 = {}.VideoPause;
                 /** @type {[typeof __VLS_components.VideoPause, ]} */ ;
                 // @ts-ignore
-                const __VLS_517 = __VLS_asFunctionalComponent(__VLS_516, new __VLS_516({}));
-                const __VLS_518 = __VLS_517({}, ...__VLS_functionalComponentArgsRest(__VLS_517));
+                const __VLS_481 = __VLS_asFunctionalComponent(__VLS_480, new __VLS_480({}));
+                const __VLS_482 = __VLS_481({}, ...__VLS_functionalComponentArgsRest(__VLS_481));
             }
             else {
-                const __VLS_520 = {}.VideoPlay;
+                const __VLS_484 = {}.VideoPlay;
                 /** @type {[typeof __VLS_components.VideoPlay, ]} */ ;
                 // @ts-ignore
-                const __VLS_521 = __VLS_asFunctionalComponent(__VLS_520, new __VLS_520({}));
-                const __VLS_522 = __VLS_521({}, ...__VLS_functionalComponentArgsRest(__VLS_521));
+                const __VLS_485 = __VLS_asFunctionalComponent(__VLS_484, new __VLS_484({}));
+                const __VLS_486 = __VLS_485({}, ...__VLS_functionalComponentArgsRest(__VLS_485));
             }
-            var __VLS_515;
-            var __VLS_511;
-            const __VLS_524 = {}.ElTooltip;
-            /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-            // @ts-ignore
-            const __VLS_525 = __VLS_asFunctionalComponent(__VLS_524, new __VLS_524({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }));
-            const __VLS_526 = __VLS_525({
-                content: (__VLS_ctx.heartbeatTooltip(data)),
-                placement: "top",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_525));
-            __VLS_527.slots.default;
+            var __VLS_479;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-clock-bar" },
             });
-            const __VLS_528 = {}.ElProgress;
+            const __VLS_488 = {}.ElProgress;
             /** @type {[typeof __VLS_components.ElProgress, typeof __VLS_components.elProgress, ]} */ ;
             // @ts-ignore
-            const __VLS_529 = __VLS_asFunctionalComponent(__VLS_528, new __VLS_528({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_489 = __VLS_asFunctionalComponent(__VLS_488, new __VLS_488({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
             }));
-            const __VLS_530 = __VLS_529({
-                percentage: (__VLS_ctx.heartbeatPercent(data)),
+            const __VLS_490 = __VLS_489({
+                percentage: (__VLS_ctx.progressPercent(data)),
                 showText: (false),
                 strokeWidth: (4),
                 color: ('#93c5fd'),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_529));
-            var __VLS_527;
-            if (__VLS_ctx.formatTaskMetaSummary(data)) {
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                    ...{ class: "task-node-meta task-node-meta-inline" },
-                });
-                (__VLS_ctx.formatTaskMetaSummary(data));
-            }
+            }, ...__VLS_functionalComponentArgsRest(__VLS_489));
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                ...{ class: "clock-progress-text" },
+            });
+            (__VLS_ctx.clockLabel(data));
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-node-actions" },
             });
-            const __VLS_532 = {}.ElButton;
+            const __VLS_492 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_533 = __VLS_asFunctionalComponent(__VLS_532, new __VLS_532({
+            const __VLS_493 = __VLS_asFunctionalComponent(__VLS_492, new __VLS_492({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "success",
                 ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
             }));
-            const __VLS_534 = __VLS_533({
+            const __VLS_494 = __VLS_493({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "success",
                 ...{ class: (data.isCompleted ? 'btn-revoke' : '') },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_533));
-            let __VLS_536;
-            let __VLS_537;
-            let __VLS_538;
-            const __VLS_539 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_493));
+            let __VLS_496;
+            let __VLS_497;
+            let __VLS_498;
+            const __VLS_499 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -3176,26 +3125,26 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.toggleComplete(data);
                 }
             };
-            __VLS_535.slots.default;
+            __VLS_495.slots.default;
             (data.isCompleted ? '撤回' : '完成');
-            var __VLS_535;
-            const __VLS_540 = {}.ElButton;
+            var __VLS_495;
+            const __VLS_500 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_541 = __VLS_asFunctionalComponent(__VLS_540, new __VLS_540({
+            const __VLS_501 = __VLS_asFunctionalComponent(__VLS_500, new __VLS_500({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "primary",
             }));
-            const __VLS_542 = __VLS_541({
+            const __VLS_502 = __VLS_501({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "primary",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_541));
-            let __VLS_544;
-            let __VLS_545;
-            let __VLS_546;
-            const __VLS_547 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_501));
+            let __VLS_504;
+            let __VLS_505;
+            let __VLS_506;
+            const __VLS_507 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -3206,25 +3155,25 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.openEditTaskDialog(data);
                 }
             };
-            __VLS_543.slots.default;
-            var __VLS_543;
-            const __VLS_548 = {}.ElButton;
+            __VLS_503.slots.default;
+            var __VLS_503;
+            const __VLS_508 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_549 = __VLS_asFunctionalComponent(__VLS_548, new __VLS_548({
+            const __VLS_509 = __VLS_asFunctionalComponent(__VLS_508, new __VLS_508({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: "btn-subdivide" },
             }));
-            const __VLS_550 = __VLS_549({
+            const __VLS_510 = __VLS_509({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: "btn-subdivide" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_549));
-            let __VLS_552;
-            let __VLS_553;
-            let __VLS_554;
-            const __VLS_555 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_509));
+            let __VLS_512;
+            let __VLS_513;
+            let __VLS_514;
+            const __VLS_515 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -3235,25 +3184,25 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.openCreateTaskDialog(data);
                 }
             };
-            __VLS_551.slots.default;
-            var __VLS_551;
-            const __VLS_556 = {}.ElButton;
+            __VLS_511.slots.default;
+            var __VLS_511;
+            const __VLS_516 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_557 = __VLS_asFunctionalComponent(__VLS_556, new __VLS_556({
+            const __VLS_517 = __VLS_asFunctionalComponent(__VLS_516, new __VLS_516({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
             }));
-            const __VLS_558 = __VLS_557({
+            const __VLS_518 = __VLS_517({
                 ...{ 'onClick': {} },
                 size: "small",
                 ...{ class: (data.active ? 'btn-disable' : 'btn-enable') },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_557));
-            let __VLS_560;
-            let __VLS_561;
-            let __VLS_562;
-            const __VLS_563 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_517));
+            let __VLS_520;
+            let __VLS_521;
+            let __VLS_522;
+            const __VLS_523 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -3264,26 +3213,26 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.toggleActive(data);
                 }
             };
-            __VLS_559.slots.default;
+            __VLS_519.slots.default;
             (data.active ? '停用' : '启用');
-            var __VLS_559;
-            const __VLS_564 = {}.ElButton;
+            var __VLS_519;
+            const __VLS_524 = {}.ElButton;
             /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
             // @ts-ignore
-            const __VLS_565 = __VLS_asFunctionalComponent(__VLS_564, new __VLS_564({
+            const __VLS_525 = __VLS_asFunctionalComponent(__VLS_524, new __VLS_524({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "danger",
             }));
-            const __VLS_566 = __VLS_565({
+            const __VLS_526 = __VLS_525({
                 ...{ 'onClick': {} },
                 size: "small",
                 type: "danger",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_565));
-            let __VLS_568;
-            let __VLS_569;
-            let __VLS_570;
-            const __VLS_571 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_525));
+            let __VLS_528;
+            let __VLS_529;
+            let __VLS_530;
+            const __VLS_531 = {
                 onClick: (...[$event]) => {
                     if (!!(__VLS_ctx.activeSection === 'todo'))
                         return;
@@ -3294,10 +3243,10 @@ else if (__VLS_ctx.activeSection === 'all') {
                     __VLS_ctx.deleteTask(data);
                 }
             };
-            __VLS_567.slots.default;
-            var __VLS_567;
+            __VLS_527.slots.default;
+            var __VLS_527;
         }
-        var __VLS_479;
+        var __VLS_447;
     }
 }
 if (__VLS_ctx.activeSection === 'review') {
@@ -3316,50 +3265,50 @@ if (__VLS_ctx.activeSection === 'review') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "panel-head-actions" },
     });
-    const __VLS_572 = {}.ElButton;
+    const __VLS_532 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_573 = __VLS_asFunctionalComponent(__VLS_572, new __VLS_572({
+    const __VLS_533 = __VLS_asFunctionalComponent(__VLS_532, new __VLS_532({
         ...{ 'onClick': {} },
         plain: true,
     }));
-    const __VLS_574 = __VLS_573({
+    const __VLS_534 = __VLS_533({
         ...{ 'onClick': {} },
         plain: true,
-    }, ...__VLS_functionalComponentArgsRest(__VLS_573));
-    let __VLS_576;
-    let __VLS_577;
-    let __VLS_578;
-    const __VLS_579 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_533));
+    let __VLS_536;
+    let __VLS_537;
+    let __VLS_538;
+    const __VLS_539 = {
         onClick: (__VLS_ctx.saveDraft)
     };
-    __VLS_575.slots.default;
-    var __VLS_575;
-    const __VLS_580 = {}.ElButton;
+    __VLS_535.slots.default;
+    var __VLS_535;
+    const __VLS_540 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_581 = __VLS_asFunctionalComponent(__VLS_580, new __VLS_580({
+    const __VLS_541 = __VLS_asFunctionalComponent(__VLS_540, new __VLS_540({
         ...{ 'onClick': {} },
         type: "warning",
         loading: (__VLS_ctx.savingReview),
     }));
-    const __VLS_582 = __VLS_581({
+    const __VLS_542 = __VLS_541({
         ...{ 'onClick': {} },
         type: "warning",
         loading: (__VLS_ctx.savingReview),
-    }, ...__VLS_functionalComponentArgsRest(__VLS_581));
-    let __VLS_584;
-    let __VLS_585;
-    let __VLS_586;
-    const __VLS_587 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_541));
+    let __VLS_544;
+    let __VLS_545;
+    let __VLS_546;
+    const __VLS_547 = {
         onClick: (__VLS_ctx.saveReviewToServer)
     };
-    __VLS_583.slots.default;
-    var __VLS_583;
-    const __VLS_588 = {}.ElInput;
+    __VLS_543.slots.default;
+    var __VLS_543;
+    const __VLS_548 = {}.ElInput;
     /** @type {[typeof __VLS_components.ElInput, typeof __VLS_components.elInput, ]} */ ;
     // @ts-ignore
-    const __VLS_589 = __VLS_asFunctionalComponent(__VLS_588, new __VLS_588({
+    const __VLS_549 = __VLS_asFunctionalComponent(__VLS_548, new __VLS_548({
         modelValue: (__VLS_ctx.reviewDraft),
         type: "textarea",
         rows: (11),
@@ -3367,14 +3316,14 @@ if (__VLS_ctx.activeSection === 'review') {
         showWordLimit: true,
         placeholder: "写下今天的 review content...",
     }));
-    const __VLS_590 = __VLS_589({
+    const __VLS_550 = __VLS_549({
         modelValue: (__VLS_ctx.reviewDraft),
         type: "textarea",
         rows: (11),
         maxlength: "2000",
         showWordLimit: true,
         placeholder: "写下今天的 review content...",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_589));
+    }, ...__VLS_functionalComponentArgsRest(__VLS_549));
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "review-tips" },
     });
@@ -3390,37 +3339,37 @@ if (__VLS_ctx.activeSection === 'review') {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({});
-    const __VLS_592 = {}.ElButton;
+    const __VLS_552 = {}.ElButton;
     /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
     // @ts-ignore
-    const __VLS_593 = __VLS_asFunctionalComponent(__VLS_592, new __VLS_592({
+    const __VLS_553 = __VLS_asFunctionalComponent(__VLS_552, new __VLS_552({
         ...{ 'onClick': {} },
         link: true,
         type: "warning",
     }));
-    const __VLS_594 = __VLS_593({
+    const __VLS_554 = __VLS_553({
         ...{ 'onClick': {} },
         link: true,
         type: "warning",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_593));
-    let __VLS_596;
-    let __VLS_597;
-    let __VLS_598;
-    const __VLS_599 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_553));
+    let __VLS_556;
+    let __VLS_557;
+    let __VLS_558;
+    const __VLS_559 = {
         onClick: (__VLS_ctx.loadReviews)
     };
-    __VLS_595.slots.default;
-    var __VLS_595;
+    __VLS_555.slots.default;
+    var __VLS_555;
     if (!__VLS_ctx.reviewHistory.length) {
-        const __VLS_600 = {}.ElEmpty;
+        const __VLS_560 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_601 = __VLS_asFunctionalComponent(__VLS_600, new __VLS_600({
+        const __VLS_561 = __VLS_asFunctionalComponent(__VLS_560, new __VLS_560({
             description: "还没有历史回顾",
         }));
-        const __VLS_602 = __VLS_601({
+        const __VLS_562 = __VLS_561({
             description: "还没有历史回顾",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_601));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_561));
     }
     else {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
@@ -3521,47 +3470,47 @@ if (__VLS_ctx.activeSection === 'review') {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "detail-footer" },
         });
-        const __VLS_604 = {}.ElTag;
+        const __VLS_564 = {}.ElTag;
         /** @type {[typeof __VLS_components.ElTag, typeof __VLS_components.elTag, typeof __VLS_components.ElTag, typeof __VLS_components.elTag, ]} */ ;
         // @ts-ignore
-        const __VLS_605 = __VLS_asFunctionalComponent(__VLS_604, new __VLS_604({
+        const __VLS_565 = __VLS_asFunctionalComponent(__VLS_564, new __VLS_564({
             type: "warning",
         }));
-        const __VLS_606 = __VLS_605({
+        const __VLS_566 = __VLS_565({
             type: "warning",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_605));
-        __VLS_607.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_565));
+        __VLS_567.slots.default;
         (__VLS_ctx.selectedReview.streakDays ?? 0);
-        var __VLS_607;
-        const __VLS_608 = {}.ElTag;
+        var __VLS_567;
+        const __VLS_568 = {}.ElTag;
         /** @type {[typeof __VLS_components.ElTag, typeof __VLS_components.elTag, typeof __VLS_components.ElTag, typeof __VLS_components.elTag, ]} */ ;
         // @ts-ignore
-        const __VLS_609 = __VLS_asFunctionalComponent(__VLS_608, new __VLS_608({
+        const __VLS_569 = __VLS_asFunctionalComponent(__VLS_568, new __VLS_568({
             type: "info",
         }));
-        const __VLS_610 = __VLS_609({
+        const __VLS_570 = __VLS_569({
             type: "info",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_609));
-        __VLS_611.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_569));
+        __VLS_571.slots.default;
         (__VLS_ctx.formatDuration(__VLS_ctx.selectedReview.grossEffort));
-        var __VLS_611;
+        var __VLS_571;
     }
     else {
-        const __VLS_612 = {}.ElEmpty;
+        const __VLS_572 = {}.ElEmpty;
         /** @type {[typeof __VLS_components.ElEmpty, typeof __VLS_components.elEmpty, ]} */ ;
         // @ts-ignore
-        const __VLS_613 = __VLS_asFunctionalComponent(__VLS_612, new __VLS_612({
+        const __VLS_573 = __VLS_asFunctionalComponent(__VLS_572, new __VLS_572({
             description: "请选择一条历史 review",
         }));
-        const __VLS_614 = __VLS_613({
+        const __VLS_574 = __VLS_573({
             description: "请选择一条历史 review",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_613));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_573));
     }
 }
-const __VLS_616 = {}.ElDialog;
+const __VLS_576 = {}.ElDialog;
 /** @type {[typeof __VLS_components.ElDialog, typeof __VLS_components.elDialog, typeof __VLS_components.ElDialog, typeof __VLS_components.elDialog, ]} */ ;
 // @ts-ignore
-const __VLS_617 = __VLS_asFunctionalComponent(__VLS_616, new __VLS_616({
+const __VLS_577 = __VLS_asFunctionalComponent(__VLS_576, new __VLS_576({
     ...{ 'onClosed': {} },
     modelValue: (__VLS_ctx.taskDialogVisible),
     title: (__VLS_ctx.taskDialogTitle),
@@ -3570,7 +3519,7 @@ const __VLS_617 = __VLS_asFunctionalComponent(__VLS_616, new __VLS_616({
     destroyOnClose: true,
     appendToBody: true,
 }));
-const __VLS_618 = __VLS_617({
+const __VLS_578 = __VLS_577({
     ...{ 'onClosed': {} },
     modelValue: (__VLS_ctx.taskDialogVisible),
     title: (__VLS_ctx.taskDialogTitle),
@@ -3578,108 +3527,108 @@ const __VLS_618 = __VLS_617({
     ...{ class: (['task-dialog', { 'view-mode': __VLS_ctx.taskDialogMode === 'view' }]) },
     destroyOnClose: true,
     appendToBody: true,
-}, ...__VLS_functionalComponentArgsRest(__VLS_617));
-let __VLS_620;
-let __VLS_621;
-let __VLS_622;
-const __VLS_623 = {
+}, ...__VLS_functionalComponentArgsRest(__VLS_577));
+let __VLS_580;
+let __VLS_581;
+let __VLS_582;
+const __VLS_583 = {
     onClosed: (__VLS_ctx.resetTaskDialog)
 };
-__VLS_619.slots.default;
+__VLS_579.slots.default;
 if (__VLS_ctx.taskDialogMode !== 'view' && !__VLS_ctx.isSceneDialog) {
-    const __VLS_624 = {}.ElSteps;
+    const __VLS_584 = {}.ElSteps;
     /** @type {[typeof __VLS_components.ElSteps, typeof __VLS_components.elSteps, typeof __VLS_components.ElSteps, typeof __VLS_components.elSteps, ]} */ ;
     // @ts-ignore
-    const __VLS_625 = __VLS_asFunctionalComponent(__VLS_624, new __VLS_624({
+    const __VLS_585 = __VLS_asFunctionalComponent(__VLS_584, new __VLS_584({
         active: (__VLS_ctx.taskDialogStep),
         finishStatus: "success",
         alignCenter: true,
         ...{ class: "task-dialog-steps" },
     }));
-    const __VLS_626 = __VLS_625({
+    const __VLS_586 = __VLS_585({
         active: (__VLS_ctx.taskDialogStep),
         finishStatus: "success",
         alignCenter: true,
         ...{ class: "task-dialog-steps" },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_625));
-    __VLS_627.slots.default;
-    const __VLS_628 = {}.ElStep;
+    }, ...__VLS_functionalComponentArgsRest(__VLS_585));
+    __VLS_587.slots.default;
+    const __VLS_588 = {}.ElStep;
     /** @type {[typeof __VLS_components.ElStep, typeof __VLS_components.elStep, ]} */ ;
     // @ts-ignore
-    const __VLS_629 = __VLS_asFunctionalComponent(__VLS_628, new __VLS_628({
+    const __VLS_589 = __VLS_asFunctionalComponent(__VLS_588, new __VLS_588({
         title: "基本信息",
     }));
-    const __VLS_630 = __VLS_629({
+    const __VLS_590 = __VLS_589({
         title: "基本信息",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_629));
-    const __VLS_632 = {}.ElStep;
+    }, ...__VLS_functionalComponentArgsRest(__VLS_589));
+    const __VLS_592 = {}.ElStep;
     /** @type {[typeof __VLS_components.ElStep, typeof __VLS_components.elStep, ]} */ ;
     // @ts-ignore
-    const __VLS_633 = __VLS_asFunctionalComponent(__VLS_632, new __VLS_632({
+    const __VLS_593 = __VLS_asFunctionalComponent(__VLS_592, new __VLS_592({
         title: "时间信息",
     }));
-    const __VLS_634 = __VLS_633({
+    const __VLS_594 = __VLS_593({
         title: "时间信息",
-    }, ...__VLS_functionalComponentArgsRest(__VLS_633));
-    var __VLS_627;
+    }, ...__VLS_functionalComponentArgsRest(__VLS_593));
+    var __VLS_587;
 }
 if (__VLS_ctx.taskDialogMode !== 'view' && __VLS_ctx.taskDialogParent) {
     __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
         ...{ class: "task-dialog-parent-chip" },
     });
     if (String(__VLS_ctx.taskDialogParent.type) === '1') {
-        const __VLS_636 = {}.ElIcon;
+        const __VLS_596 = {}.ElIcon;
         /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_637 = __VLS_asFunctionalComponent(__VLS_636, new __VLS_636({
+        const __VLS_597 = __VLS_asFunctionalComponent(__VLS_596, new __VLS_596({
             ...{ class: "task-type-icon task-type-icon-recurring" },
         }));
-        const __VLS_638 = __VLS_637({
+        const __VLS_598 = __VLS_597({
             ...{ class: "task-type-icon task-type-icon-recurring" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_637));
-        __VLS_639.slots.default;
-        const __VLS_640 = {}.Clock;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_597));
+        __VLS_599.slots.default;
+        const __VLS_600 = {}.Clock;
         /** @type {[typeof __VLS_components.Clock, ]} */ ;
         // @ts-ignore
-        const __VLS_641 = __VLS_asFunctionalComponent(__VLS_640, new __VLS_640({}));
-        const __VLS_642 = __VLS_641({}, ...__VLS_functionalComponentArgsRest(__VLS_641));
-        var __VLS_639;
+        const __VLS_601 = __VLS_asFunctionalComponent(__VLS_600, new __VLS_600({}));
+        const __VLS_602 = __VLS_601({}, ...__VLS_functionalComponentArgsRest(__VLS_601));
+        var __VLS_599;
     }
     else if (String(__VLS_ctx.taskDialogParent.type) === '2') {
-        const __VLS_644 = {}.ElIcon;
+        const __VLS_604 = {}.ElIcon;
         /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_645 = __VLS_asFunctionalComponent(__VLS_644, new __VLS_644({
+        const __VLS_605 = __VLS_asFunctionalComponent(__VLS_604, new __VLS_604({
             ...{ class: "task-type-icon task-type-icon-ddl" },
         }));
-        const __VLS_646 = __VLS_645({
+        const __VLS_606 = __VLS_605({
             ...{ class: "task-type-icon task-type-icon-ddl" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_645));
-        __VLS_647.slots.default;
-        const __VLS_648 = {}.Calendar;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_605));
+        __VLS_607.slots.default;
+        const __VLS_608 = {}.Calendar;
         /** @type {[typeof __VLS_components.Calendar, ]} */ ;
         // @ts-ignore
-        const __VLS_649 = __VLS_asFunctionalComponent(__VLS_648, new __VLS_648({}));
-        const __VLS_650 = __VLS_649({}, ...__VLS_functionalComponentArgsRest(__VLS_649));
-        var __VLS_647;
+        const __VLS_609 = __VLS_asFunctionalComponent(__VLS_608, new __VLS_608({}));
+        const __VLS_610 = __VLS_609({}, ...__VLS_functionalComponentArgsRest(__VLS_609));
+        var __VLS_607;
     }
     else {
-        const __VLS_652 = {}.ElIcon;
+        const __VLS_612 = {}.ElIcon;
         /** @type {[typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, typeof __VLS_components.ElIcon, typeof __VLS_components.elIcon, ]} */ ;
         // @ts-ignore
-        const __VLS_653 = __VLS_asFunctionalComponent(__VLS_652, new __VLS_652({
+        const __VLS_613 = __VLS_asFunctionalComponent(__VLS_612, new __VLS_612({
             ...{ class: "task-type-icon task-type-icon-note" },
         }));
-        const __VLS_654 = __VLS_653({
+        const __VLS_614 = __VLS_613({
             ...{ class: "task-type-icon task-type-icon-note" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_653));
-        __VLS_655.slots.default;
-        const __VLS_656 = {}.Document;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_613));
+        __VLS_615.slots.default;
+        const __VLS_616 = {}.Document;
         /** @type {[typeof __VLS_components.Document, ]} */ ;
         // @ts-ignore
-        const __VLS_657 = __VLS_asFunctionalComponent(__VLS_656, new __VLS_656({}));
-        const __VLS_658 = __VLS_657({}, ...__VLS_functionalComponentArgsRest(__VLS_657));
-        var __VLS_655;
+        const __VLS_617 = __VLS_asFunctionalComponent(__VLS_616, new __VLS_616({}));
+        const __VLS_618 = __VLS_617({}, ...__VLS_functionalComponentArgsRest(__VLS_617));
+        var __VLS_615;
     }
     __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
     __VLS_asFunctionalElement(__VLS_intrinsicElements.strong, __VLS_intrinsicElements.strong)({});
@@ -3687,10 +3636,10 @@ if (__VLS_ctx.taskDialogMode !== 'view' && __VLS_ctx.taskDialogParent) {
 }
 if (__VLS_ctx.taskDialogMode !== 'view') {
     for (const [warning] of __VLS_getVForSourceType((__VLS_ctx.taskDialogWarnings))) {
-        const __VLS_660 = {}.ElAlert;
+        const __VLS_620 = {}.ElAlert;
         /** @type {[typeof __VLS_components.ElAlert, typeof __VLS_components.elAlert, ]} */ ;
         // @ts-ignore
-        const __VLS_661 = __VLS_asFunctionalComponent(__VLS_660, new __VLS_660({
+        const __VLS_621 = __VLS_asFunctionalComponent(__VLS_620, new __VLS_620({
             key: (warning),
             title: (warning),
             type: "warning",
@@ -3698,14 +3647,14 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             closable: (false),
             ...{ class: "task-dialog-alert" },
         }));
-        const __VLS_662 = __VLS_661({
+        const __VLS_622 = __VLS_621({
             key: (warning),
             title: (warning),
             type: "warning",
             showIcon: true,
             closable: (false),
             ...{ class: "task-dialog-alert" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_661));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_621));
     }
 }
 if (__VLS_ctx.taskDialogMode === 'view') {
@@ -3840,10 +3789,10 @@ if (__VLS_ctx.taskDialogMode === 'view') {
     }
 }
 if (__VLS_ctx.taskDialogMode !== 'view') {
-    const __VLS_664 = {}.ElForm;
+    const __VLS_624 = {}.ElForm;
     /** @type {[typeof __VLS_components.ElForm, typeof __VLS_components.elForm, typeof __VLS_components.ElForm, typeof __VLS_components.elForm, ]} */ ;
     // @ts-ignore
-    const __VLS_665 = __VLS_asFunctionalComponent(__VLS_664, new __VLS_664({
+    const __VLS_625 = __VLS_asFunctionalComponent(__VLS_624, new __VLS_624({
         ...{ 'onSubmit': {} },
         ref: "taskFormRef",
         model: (__VLS_ctx.taskForm),
@@ -3851,71 +3800,71 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
         labelPosition: "top",
         ...{ class: "task-dialog-form" },
     }));
-    const __VLS_666 = __VLS_665({
+    const __VLS_626 = __VLS_625({
         ...{ 'onSubmit': {} },
         ref: "taskFormRef",
         model: (__VLS_ctx.taskForm),
         rules: (__VLS_ctx.taskFormRules),
         labelPosition: "top",
         ...{ class: "task-dialog-form" },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_665));
-    let __VLS_668;
-    let __VLS_669;
-    let __VLS_670;
-    const __VLS_671 = {
+    }, ...__VLS_functionalComponentArgsRest(__VLS_625));
+    let __VLS_628;
+    let __VLS_629;
+    let __VLS_630;
+    const __VLS_631 = {
         onSubmit: () => { }
     };
     /** @type {typeof __VLS_ctx.taskFormRef} */ ;
-    var __VLS_672 = {};
-    __VLS_667.slots.default;
+    var __VLS_632 = {};
+    __VLS_627.slots.default;
     if (__VLS_ctx.isSceneDialog) {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "task-dialog-page" },
         });
-        const __VLS_674 = {}.ElFormItem;
+        const __VLS_634 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_675 = __VLS_asFunctionalComponent(__VLS_674, new __VLS_674({
+        const __VLS_635 = __VLS_asFunctionalComponent(__VLS_634, new __VLS_634({
             label: "场景标题",
             prop: "title",
         }));
-        const __VLS_676 = __VLS_675({
+        const __VLS_636 = __VLS_635({
             label: "场景标题",
             prop: "title",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_675));
-        __VLS_677.slots.default;
-        const __VLS_678 = {}.ElInput;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_635));
+        __VLS_637.slots.default;
+        const __VLS_638 = {}.ElInput;
         /** @type {[typeof __VLS_components.ElInput, typeof __VLS_components.elInput, ]} */ ;
         // @ts-ignore
-        const __VLS_679 = __VLS_asFunctionalComponent(__VLS_678, new __VLS_678({
+        const __VLS_639 = __VLS_asFunctionalComponent(__VLS_638, new __VLS_638({
             modelValue: (__VLS_ctx.taskForm.title),
             placeholder: "请输入场景标题",
             maxlength: "120",
             showWordLimit: true,
         }));
-        const __VLS_680 = __VLS_679({
+        const __VLS_640 = __VLS_639({
             modelValue: (__VLS_ctx.taskForm.title),
             placeholder: "请输入场景标题",
             maxlength: "120",
             showWordLimit: true,
-        }, ...__VLS_functionalComponentArgsRest(__VLS_679));
-        var __VLS_677;
-        const __VLS_682 = {}.ElFormItem;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_639));
+        var __VLS_637;
+        const __VLS_642 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_683 = __VLS_asFunctionalComponent(__VLS_682, new __VLS_682({
+        const __VLS_643 = __VLS_asFunctionalComponent(__VLS_642, new __VLS_642({
             label: "场景描述（可选）",
             prop: "description",
         }));
-        const __VLS_684 = __VLS_683({
+        const __VLS_644 = __VLS_643({
             label: "场景描述（可选）",
             prop: "description",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_683));
-        __VLS_685.slots.default;
-        const __VLS_686 = {}.ElInput;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_643));
+        __VLS_645.slots.default;
+        const __VLS_646 = {}.ElInput;
         /** @type {[typeof __VLS_components.ElInput, typeof __VLS_components.elInput, ]} */ ;
         // @ts-ignore
-        const __VLS_687 = __VLS_asFunctionalComponent(__VLS_686, new __VLS_686({
+        const __VLS_647 = __VLS_asFunctionalComponent(__VLS_646, new __VLS_646({
             modelValue: (__VLS_ctx.taskForm.description),
             type: "textarea",
             rows: (5),
@@ -3923,82 +3872,82 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             showWordLimit: true,
             placeholder: "补充场景说明",
         }));
-        const __VLS_688 = __VLS_687({
+        const __VLS_648 = __VLS_647({
             modelValue: (__VLS_ctx.taskForm.description),
             type: "textarea",
             rows: (5),
             maxlength: "500",
             showWordLimit: true,
             placeholder: "补充场景说明",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_687));
-        var __VLS_685;
-        const __VLS_690 = {}.ElAlert;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_647));
+        var __VLS_645;
+        const __VLS_650 = {}.ElAlert;
         /** @type {[typeof __VLS_components.ElAlert, typeof __VLS_components.elAlert, ]} */ ;
         // @ts-ignore
-        const __VLS_691 = __VLS_asFunctionalComponent(__VLS_690, new __VLS_690({
+        const __VLS_651 = __VLS_asFunctionalComponent(__VLS_650, new __VLS_650({
             title: "场景不包含时间信息，保存后可在全部任务中继续添加场景内任务。",
             type: "info",
             showIcon: true,
             closable: (false),
             ...{ class: "task-dialog-alert" },
         }));
-        const __VLS_692 = __VLS_691({
+        const __VLS_652 = __VLS_651({
             title: "场景不包含时间信息，保存后可在全部任务中继续添加场景内任务。",
             type: "info",
             showIcon: true,
             closable: (false),
             ...{ class: "task-dialog-alert" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_691));
+        }, ...__VLS_functionalComponentArgsRest(__VLS_651));
     }
     else {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "task-dialog-page" },
         });
         __VLS_asFunctionalDirective(__VLS_directives.vShow)(null, { ...__VLS_directiveBindingRestFields, value: (__VLS_ctx.taskDialogStep === 0) }, null, null);
-        const __VLS_694 = {}.ElFormItem;
+        const __VLS_654 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_695 = __VLS_asFunctionalComponent(__VLS_694, new __VLS_694({
+        const __VLS_655 = __VLS_asFunctionalComponent(__VLS_654, new __VLS_654({
             label: "标题",
             prop: "title",
         }));
-        const __VLS_696 = __VLS_695({
+        const __VLS_656 = __VLS_655({
             label: "标题",
             prop: "title",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_695));
-        __VLS_697.slots.default;
-        const __VLS_698 = {}.ElInput;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_655));
+        __VLS_657.slots.default;
+        const __VLS_658 = {}.ElInput;
         /** @type {[typeof __VLS_components.ElInput, typeof __VLS_components.elInput, ]} */ ;
         // @ts-ignore
-        const __VLS_699 = __VLS_asFunctionalComponent(__VLS_698, new __VLS_698({
+        const __VLS_659 = __VLS_asFunctionalComponent(__VLS_658, new __VLS_658({
             modelValue: (__VLS_ctx.taskForm.title),
             placeholder: "请输入任务标题",
             maxlength: "120",
             showWordLimit: true,
         }));
-        const __VLS_700 = __VLS_699({
+        const __VLS_660 = __VLS_659({
             modelValue: (__VLS_ctx.taskForm.title),
             placeholder: "请输入任务标题",
             maxlength: "120",
             showWordLimit: true,
-        }, ...__VLS_functionalComponentArgsRest(__VLS_699));
-        var __VLS_697;
-        const __VLS_702 = {}.ElFormItem;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_659));
+        var __VLS_657;
+        const __VLS_662 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_703 = __VLS_asFunctionalComponent(__VLS_702, new __VLS_702({
+        const __VLS_663 = __VLS_asFunctionalComponent(__VLS_662, new __VLS_662({
             label: "描述（可选）",
             prop: "description",
         }));
-        const __VLS_704 = __VLS_703({
+        const __VLS_664 = __VLS_663({
             label: "描述（可选）",
             prop: "description",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_703));
-        __VLS_705.slots.default;
-        const __VLS_706 = {}.ElInput;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_663));
+        __VLS_665.slots.default;
+        const __VLS_666 = {}.ElInput;
         /** @type {[typeof __VLS_components.ElInput, typeof __VLS_components.elInput, ]} */ ;
         // @ts-ignore
-        const __VLS_707 = __VLS_asFunctionalComponent(__VLS_706, new __VLS_706({
+        const __VLS_667 = __VLS_asFunctionalComponent(__VLS_666, new __VLS_666({
             modelValue: (__VLS_ctx.taskForm.description),
             type: "textarea",
             rows: (4),
@@ -4006,95 +3955,95 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             showWordLimit: true,
             placeholder: "补充任务说明",
         }));
-        const __VLS_708 = __VLS_707({
+        const __VLS_668 = __VLS_667({
             modelValue: (__VLS_ctx.taskForm.description),
             type: "textarea",
             rows: (4),
             maxlength: "500",
             showWordLimit: true,
             placeholder: "补充任务说明",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_707));
-        var __VLS_705;
-        const __VLS_710 = {}.ElRow;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_667));
+        var __VLS_665;
+        const __VLS_670 = {}.ElRow;
         /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
         // @ts-ignore
-        const __VLS_711 = __VLS_asFunctionalComponent(__VLS_710, new __VLS_710({
+        const __VLS_671 = __VLS_asFunctionalComponent(__VLS_670, new __VLS_670({
             gutter: (14),
         }));
-        const __VLS_712 = __VLS_711({
+        const __VLS_672 = __VLS_671({
             gutter: (14),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_711));
-        __VLS_713.slots.default;
-        const __VLS_714 = {}.ElCol;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_671));
+        __VLS_673.slots.default;
+        const __VLS_674 = {}.ElCol;
         /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
         // @ts-ignore
-        const __VLS_715 = __VLS_asFunctionalComponent(__VLS_714, new __VLS_714({
+        const __VLS_675 = __VLS_asFunctionalComponent(__VLS_674, new __VLS_674({
             xs: (24),
             sm: (12),
         }));
-        const __VLS_716 = __VLS_715({
+        const __VLS_676 = __VLS_675({
             xs: (24),
             sm: (12),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_715));
-        __VLS_717.slots.default;
-        const __VLS_718 = {}.ElFormItem;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_675));
+        __VLS_677.slots.default;
+        const __VLS_678 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_719 = __VLS_asFunctionalComponent(__VLS_718, new __VLS_718({
+        const __VLS_679 = __VLS_asFunctionalComponent(__VLS_678, new __VLS_678({
             label: "类型",
             prop: "type",
         }));
-        const __VLS_720 = __VLS_719({
+        const __VLS_680 = __VLS_679({
             label: "类型",
             prop: "type",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_719));
-        __VLS_721.slots.default;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_679));
+        __VLS_681.slots.default;
         if (__VLS_ctx.taskForm.type !== 3) {
-            const __VLS_722 = {}.ElSelect;
+            const __VLS_682 = {}.ElSelect;
             /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
             // @ts-ignore
-            const __VLS_723 = __VLS_asFunctionalComponent(__VLS_722, new __VLS_722({
+            const __VLS_683 = __VLS_asFunctionalComponent(__VLS_682, new __VLS_682({
                 modelValue: (__VLS_ctx.taskForm.type),
                 ...{ class: "w-full" },
             }));
-            const __VLS_724 = __VLS_723({
+            const __VLS_684 = __VLS_683({
                 modelValue: (__VLS_ctx.taskForm.type),
                 ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_723));
-            __VLS_725.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_683));
+            __VLS_685.slots.default;
             for (const [option] of __VLS_getVForSourceType((__VLS_ctx.taskTypeOptions))) {
-                const __VLS_726 = {}.ElOption;
+                const __VLS_686 = {}.ElOption;
                 /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
                 // @ts-ignore
-                const __VLS_727 = __VLS_asFunctionalComponent(__VLS_726, new __VLS_726({
+                const __VLS_687 = __VLS_asFunctionalComponent(__VLS_686, new __VLS_686({
                     key: (option.value),
                     label: (option.label),
                     value: (option.value),
                 }));
-                const __VLS_728 = __VLS_727({
+                const __VLS_688 = __VLS_687({
                     key: (option.value),
                     label: (option.label),
                     value: (option.value),
-                }, ...__VLS_functionalComponentArgsRest(__VLS_727));
+                }, ...__VLS_functionalComponentArgsRest(__VLS_687));
             }
-            var __VLS_725;
+            var __VLS_685;
         }
         else {
-            const __VLS_730 = {}.ElTag;
+            const __VLS_690 = {}.ElTag;
             /** @type {[typeof __VLS_components.ElTag, typeof __VLS_components.elTag, typeof __VLS_components.ElTag, typeof __VLS_components.elTag, ]} */ ;
             // @ts-ignore
-            const __VLS_731 = __VLS_asFunctionalComponent(__VLS_730, new __VLS_730({
+            const __VLS_691 = __VLS_asFunctionalComponent(__VLS_690, new __VLS_690({
                 type: "warning",
             }));
-            const __VLS_732 = __VLS_731({
+            const __VLS_692 = __VLS_691({
                 type: "warning",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_731));
-            __VLS_733.slots.default;
-            var __VLS_733;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_691));
+            __VLS_693.slots.default;
+            var __VLS_693;
         }
-        var __VLS_721;
-        var __VLS_717;
-        var __VLS_713;
+        var __VLS_681;
+        var __VLS_677;
+        var __VLS_673;
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "task-dialog-page" },
         });
@@ -4106,133 +4055,133 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-dialog-section-title" },
             });
-            const __VLS_734 = {}.ElRow;
+            const __VLS_694 = {}.ElRow;
             /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
             // @ts-ignore
-            const __VLS_735 = __VLS_asFunctionalComponent(__VLS_734, new __VLS_734({
+            const __VLS_695 = __VLS_asFunctionalComponent(__VLS_694, new __VLS_694({
                 gutter: (14),
                 ...{ class: "task-recurrence-row" },
             }));
-            const __VLS_736 = __VLS_735({
+            const __VLS_696 = __VLS_695({
                 gutter: (14),
                 ...{ class: "task-recurrence-row" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_735));
-            __VLS_737.slots.default;
-            const __VLS_738 = {}.ElCol;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_695));
+            __VLS_697.slots.default;
+            const __VLS_698 = {}.ElCol;
             /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
             // @ts-ignore
-            const __VLS_739 = __VLS_asFunctionalComponent(__VLS_738, new __VLS_738({
+            const __VLS_699 = __VLS_asFunctionalComponent(__VLS_698, new __VLS_698({
                 xs: (24),
                 sm: (10),
             }));
-            const __VLS_740 = __VLS_739({
+            const __VLS_700 = __VLS_699({
                 xs: (24),
                 sm: (10),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_739));
-            __VLS_741.slots.default;
-            const __VLS_742 = {}.ElFormItem;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_699));
+            __VLS_701.slots.default;
+            const __VLS_702 = {}.ElFormItem;
             /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
             // @ts-ignore
-            const __VLS_743 = __VLS_asFunctionalComponent(__VLS_742, new __VLS_742({
+            const __VLS_703 = __VLS_asFunctionalComponent(__VLS_702, new __VLS_702({
                 label: "循环尺度",
                 prop: "cycleMode",
             }));
-            const __VLS_744 = __VLS_743({
+            const __VLS_704 = __VLS_703({
                 label: "循环尺度",
                 prop: "cycleMode",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_743));
-            __VLS_745.slots.default;
-            const __VLS_746 = {}.ElSelect;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_703));
+            __VLS_705.slots.default;
+            const __VLS_706 = {}.ElSelect;
             /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
             // @ts-ignore
-            const __VLS_747 = __VLS_asFunctionalComponent(__VLS_746, new __VLS_746({
+            const __VLS_707 = __VLS_asFunctionalComponent(__VLS_706, new __VLS_706({
                 modelValue: (__VLS_ctx.taskForm.cycleMode),
                 ...{ class: "w-full" },
             }));
-            const __VLS_748 = __VLS_747({
+            const __VLS_708 = __VLS_707({
                 modelValue: (__VLS_ctx.taskForm.cycleMode),
                 ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_747));
-            __VLS_749.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_707));
+            __VLS_709.slots.default;
             for (const [option] of __VLS_getVForSourceType((__VLS_ctx.cycleModeOptions))) {
-                const __VLS_750 = {}.ElOption;
+                const __VLS_710 = {}.ElOption;
                 /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
                 // @ts-ignore
-                const __VLS_751 = __VLS_asFunctionalComponent(__VLS_750, new __VLS_750({
+                const __VLS_711 = __VLS_asFunctionalComponent(__VLS_710, new __VLS_710({
                     key: (option.value),
                     label: (option.label),
                     value: (option.value),
                 }));
-                const __VLS_752 = __VLS_751({
+                const __VLS_712 = __VLS_711({
                     key: (option.value),
                     label: (option.label),
                     value: (option.value),
-                }, ...__VLS_functionalComponentArgsRest(__VLS_751));
+                }, ...__VLS_functionalComponentArgsRest(__VLS_711));
             }
-            var __VLS_749;
-            var __VLS_745;
-            var __VLS_741;
-            const __VLS_754 = {}.ElCol;
+            var __VLS_709;
+            var __VLS_705;
+            var __VLS_701;
+            const __VLS_714 = {}.ElCol;
             /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
             // @ts-ignore
-            const __VLS_755 = __VLS_asFunctionalComponent(__VLS_754, new __VLS_754({
+            const __VLS_715 = __VLS_asFunctionalComponent(__VLS_714, new __VLS_714({
                 xs: (24),
                 sm: (14),
             }));
-            const __VLS_756 = __VLS_755({
+            const __VLS_716 = __VLS_715({
                 xs: (24),
                 sm: (14),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_755));
-            __VLS_757.slots.default;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_715));
+            __VLS_717.slots.default;
             if (__VLS_ctx.taskForm.cycleMode === 'interval') {
-                const __VLS_758 = {}.ElFormItem;
+                const __VLS_718 = {}.ElFormItem;
                 /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
                 // @ts-ignore
-                const __VLS_759 = __VLS_asFunctionalComponent(__VLS_758, new __VLS_758({
+                const __VLS_719 = __VLS_asFunctionalComponent(__VLS_718, new __VLS_718({
                     label: "具体选择",
                     prop: "cycleIntervalDays",
                 }));
-                const __VLS_760 = __VLS_759({
+                const __VLS_720 = __VLS_719({
                     label: "具体选择",
                     prop: "cycleIntervalDays",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_759));
-                __VLS_761.slots.default;
-                const __VLS_762 = {}.ElInputNumber;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_719));
+                __VLS_721.slots.default;
+                const __VLS_722 = {}.ElInputNumber;
                 /** @type {[typeof __VLS_components.ElInputNumber, typeof __VLS_components.elInputNumber, ]} */ ;
                 // @ts-ignore
-                const __VLS_763 = __VLS_asFunctionalComponent(__VLS_762, new __VLS_762({
+                const __VLS_723 = __VLS_asFunctionalComponent(__VLS_722, new __VLS_722({
                     modelValue: (__VLS_ctx.taskForm.cycleIntervalDays),
                     min: (1),
                     step: (1),
                     controlsPosition: "right",
                     ...{ class: "w-full" },
                 }));
-                const __VLS_764 = __VLS_763({
+                const __VLS_724 = __VLS_723({
                     modelValue: (__VLS_ctx.taskForm.cycleIntervalDays),
                     min: (1),
                     step: (1),
                     controlsPosition: "right",
                     ...{ class: "w-full" },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_763));
-                var __VLS_761;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_723));
+                var __VLS_721;
             }
             else if (__VLS_ctx.taskForm.cycleMode === 'weekly') {
-                const __VLS_766 = {}.ElFormItem;
+                const __VLS_726 = {}.ElFormItem;
                 /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
                 // @ts-ignore
-                const __VLS_767 = __VLS_asFunctionalComponent(__VLS_766, new __VLS_766({
+                const __VLS_727 = __VLS_asFunctionalComponent(__VLS_726, new __VLS_726({
                     label: "具体选择",
                     prop: "cycleWeekdays",
                 }));
-                const __VLS_768 = __VLS_767({
+                const __VLS_728 = __VLS_727({
                     label: "具体选择",
                     prop: "cycleWeekdays",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_767));
-                __VLS_769.slots.default;
-                const __VLS_770 = {}.ElSelect;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_727));
+                __VLS_729.slots.default;
+                const __VLS_730 = {}.ElSelect;
                 /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
                 // @ts-ignore
-                const __VLS_771 = __VLS_asFunctionalComponent(__VLS_770, new __VLS_770({
+                const __VLS_731 = __VLS_asFunctionalComponent(__VLS_730, new __VLS_730({
                     modelValue: (__VLS_ctx.taskForm.cycleWeekdays),
                     multiple: true,
                     collapseTags: true,
@@ -4240,50 +4189,50 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                     ...{ class: "w-full" },
                     placeholder: "选择一个或多个星期",
                 }));
-                const __VLS_772 = __VLS_771({
+                const __VLS_732 = __VLS_731({
                     modelValue: (__VLS_ctx.taskForm.cycleWeekdays),
                     multiple: true,
                     collapseTags: true,
                     collapseTagsTooltip: true,
                     ...{ class: "w-full" },
                     placeholder: "选择一个或多个星期",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_771));
-                __VLS_773.slots.default;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_731));
+                __VLS_733.slots.default;
                 for (const [option] of __VLS_getVForSourceType((__VLS_ctx.weekdayOptions))) {
-                    const __VLS_774 = {}.ElOption;
+                    const __VLS_734 = {}.ElOption;
                     /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
                     // @ts-ignore
-                    const __VLS_775 = __VLS_asFunctionalComponent(__VLS_774, new __VLS_774({
+                    const __VLS_735 = __VLS_asFunctionalComponent(__VLS_734, new __VLS_734({
                         key: (option.value),
                         label: (option.label),
                         value: (option.value),
                     }));
-                    const __VLS_776 = __VLS_775({
+                    const __VLS_736 = __VLS_735({
                         key: (option.value),
                         label: (option.label),
                         value: (option.value),
-                    }, ...__VLS_functionalComponentArgsRest(__VLS_775));
+                    }, ...__VLS_functionalComponentArgsRest(__VLS_735));
                 }
-                var __VLS_773;
-                var __VLS_769;
+                var __VLS_733;
+                var __VLS_729;
             }
             else if (__VLS_ctx.taskForm.cycleMode === 'monthly') {
-                const __VLS_778 = {}.ElFormItem;
+                const __VLS_738 = {}.ElFormItem;
                 /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
                 // @ts-ignore
-                const __VLS_779 = __VLS_asFunctionalComponent(__VLS_778, new __VLS_778({
+                const __VLS_739 = __VLS_asFunctionalComponent(__VLS_738, new __VLS_738({
                     label: "具体选择",
                     prop: "cycleMonthDays",
                 }));
-                const __VLS_780 = __VLS_779({
+                const __VLS_740 = __VLS_739({
                     label: "具体选择",
                     prop: "cycleMonthDays",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_779));
-                __VLS_781.slots.default;
-                const __VLS_782 = {}.ElSelect;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_739));
+                __VLS_741.slots.default;
+                const __VLS_742 = {}.ElSelect;
                 /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
                 // @ts-ignore
-                const __VLS_783 = __VLS_asFunctionalComponent(__VLS_782, new __VLS_782({
+                const __VLS_743 = __VLS_asFunctionalComponent(__VLS_742, new __VLS_742({
                     modelValue: (__VLS_ctx.taskForm.cycleMonthDays),
                     multiple: true,
                     collapseTags: true,
@@ -4291,35 +4240,35 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                     ...{ class: "w-full" },
                     placeholder: "选择一个或多个日期",
                 }));
-                const __VLS_784 = __VLS_783({
+                const __VLS_744 = __VLS_743({
                     modelValue: (__VLS_ctx.taskForm.cycleMonthDays),
                     multiple: true,
                     collapseTags: true,
                     collapseTagsTooltip: true,
                     ...{ class: "w-full" },
                     placeholder: "选择一个或多个日期",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_783));
-                __VLS_785.slots.default;
+                }, ...__VLS_functionalComponentArgsRest(__VLS_743));
+                __VLS_745.slots.default;
                 for (const [option] of __VLS_getVForSourceType((__VLS_ctx.monthDayOptions))) {
-                    const __VLS_786 = {}.ElOption;
+                    const __VLS_746 = {}.ElOption;
                     /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
                     // @ts-ignore
-                    const __VLS_787 = __VLS_asFunctionalComponent(__VLS_786, new __VLS_786({
+                    const __VLS_747 = __VLS_asFunctionalComponent(__VLS_746, new __VLS_746({
                         key: (option.value),
                         label: (option.label),
                         value: (option.value),
                     }));
-                    const __VLS_788 = __VLS_787({
+                    const __VLS_748 = __VLS_747({
                         key: (option.value),
                         label: (option.label),
                         value: (option.value),
-                    }, ...__VLS_functionalComponentArgsRest(__VLS_787));
+                    }, ...__VLS_functionalComponentArgsRest(__VLS_747));
                 }
-                var __VLS_785;
-                var __VLS_781;
+                var __VLS_745;
+                var __VLS_741;
             }
-            var __VLS_757;
-            var __VLS_737;
+            var __VLS_717;
+            var __VLS_697;
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-dialog-helper-text" },
             });
@@ -4330,89 +4279,89 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
         __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
             ...{ class: "task-dialog-section-title" },
         });
-        const __VLS_790 = {}.ElRow;
+        const __VLS_750 = {}.ElRow;
         /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
         // @ts-ignore
-        const __VLS_791 = __VLS_asFunctionalComponent(__VLS_790, new __VLS_790({
+        const __VLS_751 = __VLS_asFunctionalComponent(__VLS_750, new __VLS_750({
             gutter: (14),
             ...{ class: "task-duration-row" },
         }));
-        const __VLS_792 = __VLS_791({
+        const __VLS_752 = __VLS_751({
             gutter: (14),
             ...{ class: "task-duration-row" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_791));
-        __VLS_793.slots.default;
-        const __VLS_794 = {}.ElCol;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_751));
+        __VLS_753.slots.default;
+        const __VLS_754 = {}.ElCol;
         /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
         // @ts-ignore
-        const __VLS_795 = __VLS_asFunctionalComponent(__VLS_794, new __VLS_794({
+        const __VLS_755 = __VLS_asFunctionalComponent(__VLS_754, new __VLS_754({
             xs: (24),
             sm: (12),
         }));
-        const __VLS_796 = __VLS_795({
+        const __VLS_756 = __VLS_755({
             xs: (24),
             sm: (12),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_795));
-        __VLS_797.slots.default;
-        const __VLS_798 = {}.ElFormItem;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_755));
+        __VLS_757.slots.default;
+        const __VLS_758 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_799 = __VLS_asFunctionalComponent(__VLS_798, new __VLS_798({
+        const __VLS_759 = __VLS_asFunctionalComponent(__VLS_758, new __VLS_758({
             label: "小时",
             prop: "planDurationHours",
         }));
-        const __VLS_800 = __VLS_799({
+        const __VLS_760 = __VLS_759({
             label: "小时",
             prop: "planDurationHours",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_799));
-        __VLS_801.slots.default;
-        const __VLS_802 = {}.ElInputNumber;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_759));
+        __VLS_761.slots.default;
+        const __VLS_762 = {}.ElInputNumber;
         /** @type {[typeof __VLS_components.ElInputNumber, typeof __VLS_components.elInputNumber, ]} */ ;
         // @ts-ignore
-        const __VLS_803 = __VLS_asFunctionalComponent(__VLS_802, new __VLS_802({
+        const __VLS_763 = __VLS_asFunctionalComponent(__VLS_762, new __VLS_762({
             modelValue: (__VLS_ctx.taskForm.planDurationHours),
             min: (0),
             step: (1),
             controlsPosition: "right",
             ...{ class: "w-full" },
         }));
-        const __VLS_804 = __VLS_803({
+        const __VLS_764 = __VLS_763({
             modelValue: (__VLS_ctx.taskForm.planDurationHours),
             min: (0),
             step: (1),
             controlsPosition: "right",
             ...{ class: "w-full" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_803));
-        var __VLS_801;
-        var __VLS_797;
-        const __VLS_806 = {}.ElCol;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_763));
+        var __VLS_761;
+        var __VLS_757;
+        const __VLS_766 = {}.ElCol;
         /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
         // @ts-ignore
-        const __VLS_807 = __VLS_asFunctionalComponent(__VLS_806, new __VLS_806({
+        const __VLS_767 = __VLS_asFunctionalComponent(__VLS_766, new __VLS_766({
             xs: (24),
             sm: (12),
         }));
-        const __VLS_808 = __VLS_807({
+        const __VLS_768 = __VLS_767({
             xs: (24),
             sm: (12),
-        }, ...__VLS_functionalComponentArgsRest(__VLS_807));
-        __VLS_809.slots.default;
-        const __VLS_810 = {}.ElFormItem;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_767));
+        __VLS_769.slots.default;
+        const __VLS_770 = {}.ElFormItem;
         /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
         // @ts-ignore
-        const __VLS_811 = __VLS_asFunctionalComponent(__VLS_810, new __VLS_810({
+        const __VLS_771 = __VLS_asFunctionalComponent(__VLS_770, new __VLS_770({
             label: "分钟",
             prop: "planDurationMinutes",
         }));
-        const __VLS_812 = __VLS_811({
+        const __VLS_772 = __VLS_771({
             label: "分钟",
             prop: "planDurationMinutes",
-        }, ...__VLS_functionalComponentArgsRest(__VLS_811));
-        __VLS_813.slots.default;
-        const __VLS_814 = {}.ElInputNumber;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_771));
+        __VLS_773.slots.default;
+        const __VLS_774 = {}.ElInputNumber;
         /** @type {[typeof __VLS_components.ElInputNumber, typeof __VLS_components.elInputNumber, ]} */ ;
         // @ts-ignore
-        const __VLS_815 = __VLS_asFunctionalComponent(__VLS_814, new __VLS_814({
+        const __VLS_775 = __VLS_asFunctionalComponent(__VLS_774, new __VLS_774({
             modelValue: (__VLS_ctx.taskForm.planDurationMinutes),
             min: (0),
             max: (59),
@@ -4420,17 +4369,17 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             controlsPosition: "right",
             ...{ class: "w-full" },
         }));
-        const __VLS_816 = __VLS_815({
+        const __VLS_776 = __VLS_775({
             modelValue: (__VLS_ctx.taskForm.planDurationMinutes),
             min: (0),
             max: (59),
             step: (1),
             controlsPosition: "right",
             ...{ class: "w-full" },
-        }, ...__VLS_functionalComponentArgsRest(__VLS_815));
-        var __VLS_813;
-        var __VLS_809;
-        var __VLS_793;
+        }, ...__VLS_functionalComponentArgsRest(__VLS_775));
+        var __VLS_773;
+        var __VLS_769;
+        var __VLS_753;
         if (__VLS_ctx.isRecurringTask) {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-dialog-section-block" },
@@ -4438,6 +4387,139 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
             __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
                 ...{ class: "task-dialog-section-title" },
             });
+            const __VLS_778 = {}.ElRow;
+            /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
+            // @ts-ignore
+            const __VLS_779 = __VLS_asFunctionalComponent(__VLS_778, new __VLS_778({
+                gutter: (10),
+                ...{ class: "task-datetime-row" },
+            }));
+            const __VLS_780 = __VLS_779({
+                gutter: (10),
+                ...{ class: "task-datetime-row" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_779));
+            __VLS_781.slots.default;
+            const __VLS_782 = {}.ElCol;
+            /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
+            // @ts-ignore
+            const __VLS_783 = __VLS_asFunctionalComponent(__VLS_782, new __VLS_782({
+                xs: (24),
+                sm: (12),
+            }));
+            const __VLS_784 = __VLS_783({
+                xs: (24),
+                sm: (12),
+            }, ...__VLS_functionalComponentArgsRest(__VLS_783));
+            __VLS_785.slots.default;
+            const __VLS_786 = {}.ElFormItem;
+            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            // @ts-ignore
+            const __VLS_787 = __VLS_asFunctionalComponent(__VLS_786, new __VLS_786({
+                label: "开始时分",
+            }));
+            const __VLS_788 = __VLS_787({
+                label: "开始时分",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_787));
+            __VLS_789.slots.default;
+            const __VLS_790 = {}.ElTimePicker;
+            /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
+            // @ts-ignore
+            const __VLS_791 = __VLS_asFunctionalComponent(__VLS_790, new __VLS_790({
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
+                format: "HH:mm",
+                valueFormat: "HH:mm:ss",
+                placeholder: "选择时分",
+                ...{ class: "w-full" },
+            }));
+            const __VLS_792 = __VLS_791({
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
+                format: "HH:mm",
+                valueFormat: "HH:mm:ss",
+                placeholder: "选择时分",
+                ...{ class: "w-full" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_791));
+            let __VLS_794;
+            let __VLS_795;
+            let __VLS_796;
+            const __VLS_797 = {
+                'onUpdate:modelValue': (__VLS_ctx.updateStartTimePart)
+            };
+            var __VLS_793;
+            var __VLS_789;
+            var __VLS_785;
+            const __VLS_798 = {}.ElCol;
+            /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
+            // @ts-ignore
+            const __VLS_799 = __VLS_asFunctionalComponent(__VLS_798, new __VLS_798({
+                xs: (24),
+                sm: (12),
+            }));
+            const __VLS_800 = __VLS_799({
+                xs: (24),
+                sm: (12),
+            }, ...__VLS_functionalComponentArgsRest(__VLS_799));
+            __VLS_801.slots.default;
+            const __VLS_802 = {}.ElFormItem;
+            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            // @ts-ignore
+            const __VLS_803 = __VLS_asFunctionalComponent(__VLS_802, new __VLS_802({
+                label: "结束时分",
+            }));
+            const __VLS_804 = __VLS_803({
+                label: "结束时分",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_803));
+            __VLS_805.slots.default;
+            const __VLS_806 = {}.ElTimePicker;
+            /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
+            // @ts-ignore
+            const __VLS_807 = __VLS_asFunctionalComponent(__VLS_806, new __VLS_806({
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
+                format: "HH:mm",
+                valueFormat: "HH:mm:ss",
+                placeholder: "选择时分",
+                ...{ class: "w-full" },
+            }));
+            const __VLS_808 = __VLS_807({
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
+                format: "HH:mm",
+                valueFormat: "HH:mm:ss",
+                placeholder: "选择时分",
+                ...{ class: "w-full" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_807));
+            let __VLS_810;
+            let __VLS_811;
+            let __VLS_812;
+            const __VLS_813 = {
+                'onUpdate:modelValue': (__VLS_ctx.updateEndTimePart)
+            };
+            var __VLS_809;
+            var __VLS_805;
+            var __VLS_801;
+            var __VLS_781;
+        }
+        else {
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                ...{ class: "task-dialog-section-block" },
+            });
+            __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+                ...{ class: "task-dialog-section-title" },
+            });
+            const __VLS_814 = {}.ElFormItem;
+            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            // @ts-ignore
+            const __VLS_815 = __VLS_asFunctionalComponent(__VLS_814, new __VLS_814({
+                label: "开始时间",
+                prop: "startTime",
+            }));
+            const __VLS_816 = __VLS_815({
+                label: "开始时间",
+                prop: "startTime",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_815));
+            __VLS_817.slots.default;
             const __VLS_818 = {}.ElRow;
             /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
             // @ts-ignore
@@ -4462,184 +4544,51 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                 sm: (12),
             }, ...__VLS_functionalComponentArgsRest(__VLS_823));
             __VLS_825.slots.default;
-            const __VLS_826 = {}.ElFormItem;
-            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            const __VLS_826 = {}.ElDatePicker;
+            /** @type {[typeof __VLS_components.ElDatePicker, typeof __VLS_components.elDatePicker, ]} */ ;
             // @ts-ignore
             const __VLS_827 = __VLS_asFunctionalComponent(__VLS_826, new __VLS_826({
-                label: "开始时分",
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.startTime)),
+                type: "date",
+                format: "YYYY-MM-DD",
+                valueFormat: "YYYY-MM-DD",
+                placeholder: "选择日期",
+                ...{ class: "w-full" },
             }));
             const __VLS_828 = __VLS_827({
-                label: "开始时分",
+                ...{ 'onUpdate:modelValue': {} },
+                modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.startTime)),
+                type: "date",
+                format: "YYYY-MM-DD",
+                valueFormat: "YYYY-MM-DD",
+                placeholder: "选择日期",
+                ...{ class: "w-full" },
             }, ...__VLS_functionalComponentArgsRest(__VLS_827));
-            __VLS_829.slots.default;
-            const __VLS_830 = {}.ElTimePicker;
-            /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
-            // @ts-ignore
-            const __VLS_831 = __VLS_asFunctionalComponent(__VLS_830, new __VLS_830({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
-                format: "HH:mm",
-                valueFormat: "HH:mm:ss",
-                placeholder: "选择时分",
-                ...{ class: "w-full" },
-            }));
-            const __VLS_832 = __VLS_831({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
-                format: "HH:mm",
-                valueFormat: "HH:mm:ss",
-                placeholder: "选择时分",
-                ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_831));
-            let __VLS_834;
-            let __VLS_835;
-            let __VLS_836;
-            const __VLS_837 = {
-                'onUpdate:modelValue': (__VLS_ctx.updateStartTimePart)
-            };
-            var __VLS_833;
-            var __VLS_829;
-            var __VLS_825;
-            const __VLS_838 = {}.ElCol;
-            /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
-            // @ts-ignore
-            const __VLS_839 = __VLS_asFunctionalComponent(__VLS_838, new __VLS_838({
-                xs: (24),
-                sm: (12),
-            }));
-            const __VLS_840 = __VLS_839({
-                xs: (24),
-                sm: (12),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_839));
-            __VLS_841.slots.default;
-            const __VLS_842 = {}.ElFormItem;
-            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
-            // @ts-ignore
-            const __VLS_843 = __VLS_asFunctionalComponent(__VLS_842, new __VLS_842({
-                label: "结束时分",
-            }));
-            const __VLS_844 = __VLS_843({
-                label: "结束时分",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_843));
-            __VLS_845.slots.default;
-            const __VLS_846 = {}.ElTimePicker;
-            /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
-            // @ts-ignore
-            const __VLS_847 = __VLS_asFunctionalComponent(__VLS_846, new __VLS_846({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
-                format: "HH:mm",
-                valueFormat: "HH:mm:ss",
-                placeholder: "选择时分",
-                ...{ class: "w-full" },
-            }));
-            const __VLS_848 = __VLS_847({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
-                format: "HH:mm",
-                valueFormat: "HH:mm:ss",
-                placeholder: "选择时分",
-                ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_847));
-            let __VLS_850;
-            let __VLS_851;
-            let __VLS_852;
-            const __VLS_853 = {
-                'onUpdate:modelValue': (__VLS_ctx.updateEndTimePart)
-            };
-            var __VLS_849;
-            var __VLS_845;
-            var __VLS_841;
-            var __VLS_821;
-        }
-        else {
-            __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                ...{ class: "task-dialog-section-block" },
-            });
-            __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-                ...{ class: "task-dialog-section-title" },
-            });
-            const __VLS_854 = {}.ElFormItem;
-            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
-            // @ts-ignore
-            const __VLS_855 = __VLS_asFunctionalComponent(__VLS_854, new __VLS_854({
-                label: "开始时间",
-                prop: "startTime",
-            }));
-            const __VLS_856 = __VLS_855({
-                label: "开始时间",
-                prop: "startTime",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_855));
-            __VLS_857.slots.default;
-            const __VLS_858 = {}.ElRow;
-            /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
-            // @ts-ignore
-            const __VLS_859 = __VLS_asFunctionalComponent(__VLS_858, new __VLS_858({
-                gutter: (10),
-                ...{ class: "task-datetime-row" },
-            }));
-            const __VLS_860 = __VLS_859({
-                gutter: (10),
-                ...{ class: "task-datetime-row" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_859));
-            __VLS_861.slots.default;
-            const __VLS_862 = {}.ElCol;
-            /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
-            // @ts-ignore
-            const __VLS_863 = __VLS_asFunctionalComponent(__VLS_862, new __VLS_862({
-                xs: (24),
-                sm: (12),
-            }));
-            const __VLS_864 = __VLS_863({
-                xs: (24),
-                sm: (12),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_863));
-            __VLS_865.slots.default;
-            const __VLS_866 = {}.ElDatePicker;
-            /** @type {[typeof __VLS_components.ElDatePicker, typeof __VLS_components.elDatePicker, ]} */ ;
-            // @ts-ignore
-            const __VLS_867 = __VLS_asFunctionalComponent(__VLS_866, new __VLS_866({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.startTime)),
-                type: "date",
-                format: "YYYY-MM-DD",
-                valueFormat: "YYYY-MM-DD",
-                placeholder: "选择日期",
-                ...{ class: "w-full" },
-            }));
-            const __VLS_868 = __VLS_867({
-                ...{ 'onUpdate:modelValue': {} },
-                modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.startTime)),
-                type: "date",
-                format: "YYYY-MM-DD",
-                valueFormat: "YYYY-MM-DD",
-                placeholder: "选择日期",
-                ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_867));
-            let __VLS_870;
-            let __VLS_871;
-            let __VLS_872;
-            const __VLS_873 = {
+            let __VLS_830;
+            let __VLS_831;
+            let __VLS_832;
+            const __VLS_833 = {
                 'onUpdate:modelValue': (__VLS_ctx.updateStartDatePart)
             };
-            var __VLS_869;
-            var __VLS_865;
-            const __VLS_874 = {}.ElCol;
+            var __VLS_829;
+            var __VLS_825;
+            const __VLS_834 = {}.ElCol;
             /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
             // @ts-ignore
-            const __VLS_875 = __VLS_asFunctionalComponent(__VLS_874, new __VLS_874({
+            const __VLS_835 = __VLS_asFunctionalComponent(__VLS_834, new __VLS_834({
                 xs: (24),
                 sm: (12),
             }));
-            const __VLS_876 = __VLS_875({
+            const __VLS_836 = __VLS_835({
                 xs: (24),
                 sm: (12),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_875));
-            __VLS_877.slots.default;
-            const __VLS_878 = {}.ElTimePicker;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_835));
+            __VLS_837.slots.default;
+            const __VLS_838 = {}.ElTimePicker;
             /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
             // @ts-ignore
-            const __VLS_879 = __VLS_asFunctionalComponent(__VLS_878, new __VLS_878({
+            const __VLS_839 = __VLS_asFunctionalComponent(__VLS_838, new __VLS_838({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
                 format: "HH:mm",
@@ -4647,64 +4596,64 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                 placeholder: "选择时分",
                 ...{ class: "w-full" },
             }));
-            const __VLS_880 = __VLS_879({
+            const __VLS_840 = __VLS_839({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.startTime)),
                 format: "HH:mm",
                 valueFormat: "HH:mm:ss",
                 placeholder: "选择时分",
                 ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_879));
-            let __VLS_882;
-            let __VLS_883;
-            let __VLS_884;
-            const __VLS_885 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_839));
+            let __VLS_842;
+            let __VLS_843;
+            let __VLS_844;
+            const __VLS_845 = {
                 'onUpdate:modelValue': (__VLS_ctx.updateStartTimePart)
             };
-            var __VLS_881;
-            var __VLS_877;
-            var __VLS_861;
-            var __VLS_857;
-            const __VLS_886 = {}.ElFormItem;
+            var __VLS_841;
+            var __VLS_837;
+            var __VLS_821;
+            var __VLS_817;
+            const __VLS_846 = {}.ElFormItem;
             /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
             // @ts-ignore
-            const __VLS_887 = __VLS_asFunctionalComponent(__VLS_886, new __VLS_886({
+            const __VLS_847 = __VLS_asFunctionalComponent(__VLS_846, new __VLS_846({
                 label: (String(__VLS_ctx.taskForm.type) === '2' ? '完成时间' : '结束时间'),
                 prop: "endTime",
             }));
-            const __VLS_888 = __VLS_887({
+            const __VLS_848 = __VLS_847({
                 label: (String(__VLS_ctx.taskForm.type) === '2' ? '完成时间' : '结束时间'),
                 prop: "endTime",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_887));
-            __VLS_889.slots.default;
-            const __VLS_890 = {}.ElRow;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_847));
+            __VLS_849.slots.default;
+            const __VLS_850 = {}.ElRow;
             /** @type {[typeof __VLS_components.ElRow, typeof __VLS_components.elRow, typeof __VLS_components.ElRow, typeof __VLS_components.elRow, ]} */ ;
             // @ts-ignore
-            const __VLS_891 = __VLS_asFunctionalComponent(__VLS_890, new __VLS_890({
+            const __VLS_851 = __VLS_asFunctionalComponent(__VLS_850, new __VLS_850({
                 gutter: (10),
                 ...{ class: "task-datetime-row" },
             }));
-            const __VLS_892 = __VLS_891({
+            const __VLS_852 = __VLS_851({
                 gutter: (10),
                 ...{ class: "task-datetime-row" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_891));
-            __VLS_893.slots.default;
-            const __VLS_894 = {}.ElCol;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_851));
+            __VLS_853.slots.default;
+            const __VLS_854 = {}.ElCol;
             /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
             // @ts-ignore
-            const __VLS_895 = __VLS_asFunctionalComponent(__VLS_894, new __VLS_894({
+            const __VLS_855 = __VLS_asFunctionalComponent(__VLS_854, new __VLS_854({
                 xs: (24),
                 sm: (12),
             }));
-            const __VLS_896 = __VLS_895({
+            const __VLS_856 = __VLS_855({
                 xs: (24),
                 sm: (12),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_895));
-            __VLS_897.slots.default;
-            const __VLS_898 = {}.ElDatePicker;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_855));
+            __VLS_857.slots.default;
+            const __VLS_858 = {}.ElDatePicker;
             /** @type {[typeof __VLS_components.ElDatePicker, typeof __VLS_components.elDatePicker, ]} */ ;
             // @ts-ignore
-            const __VLS_899 = __VLS_asFunctionalComponent(__VLS_898, new __VLS_898({
+            const __VLS_859 = __VLS_asFunctionalComponent(__VLS_858, new __VLS_858({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.endTime)),
                 type: "date",
@@ -4713,7 +4662,7 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                 placeholder: "选择日期",
                 ...{ class: "w-full" },
             }));
-            const __VLS_900 = __VLS_899({
+            const __VLS_860 = __VLS_859({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getDatePart(__VLS_ctx.taskForm.endTime)),
                 type: "date",
@@ -4721,31 +4670,31 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                 valueFormat: "YYYY-MM-DD",
                 placeholder: "选择日期",
                 ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_899));
-            let __VLS_902;
-            let __VLS_903;
-            let __VLS_904;
-            const __VLS_905 = {
+            }, ...__VLS_functionalComponentArgsRest(__VLS_859));
+            let __VLS_862;
+            let __VLS_863;
+            let __VLS_864;
+            const __VLS_865 = {
                 'onUpdate:modelValue': (__VLS_ctx.updateEndDatePart)
             };
-            var __VLS_901;
-            var __VLS_897;
-            const __VLS_906 = {}.ElCol;
+            var __VLS_861;
+            var __VLS_857;
+            const __VLS_866 = {}.ElCol;
             /** @type {[typeof __VLS_components.ElCol, typeof __VLS_components.elCol, typeof __VLS_components.ElCol, typeof __VLS_components.elCol, ]} */ ;
             // @ts-ignore
-            const __VLS_907 = __VLS_asFunctionalComponent(__VLS_906, new __VLS_906({
+            const __VLS_867 = __VLS_asFunctionalComponent(__VLS_866, new __VLS_866({
                 xs: (24),
                 sm: (12),
             }));
-            const __VLS_908 = __VLS_907({
+            const __VLS_868 = __VLS_867({
                 xs: (24),
                 sm: (12),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_907));
-            __VLS_909.slots.default;
-            const __VLS_910 = {}.ElTimePicker;
+            }, ...__VLS_functionalComponentArgsRest(__VLS_867));
+            __VLS_869.slots.default;
+            const __VLS_870 = {}.ElTimePicker;
             /** @type {[typeof __VLS_components.ElTimePicker, typeof __VLS_components.elTimePicker, ]} */ ;
             // @ts-ignore
-            const __VLS_911 = __VLS_asFunctionalComponent(__VLS_910, new __VLS_910({
+            const __VLS_871 = __VLS_asFunctionalComponent(__VLS_870, new __VLS_870({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
                 format: "HH:mm",
@@ -4753,190 +4702,190 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                 placeholder: "选择时分",
                 ...{ class: "w-full" },
             }));
-            const __VLS_912 = __VLS_911({
+            const __VLS_872 = __VLS_871({
                 ...{ 'onUpdate:modelValue': {} },
                 modelValue: (__VLS_ctx.getTimePart(__VLS_ctx.taskForm.endTime)),
                 format: "HH:mm",
                 valueFormat: "HH:mm:ss",
                 placeholder: "选择时分",
                 ...{ class: "w-full" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_871));
+            let __VLS_874;
+            let __VLS_875;
+            let __VLS_876;
+            const __VLS_877 = {
+                'onUpdate:modelValue': (__VLS_ctx.updateEndTimePart)
+            };
+            var __VLS_873;
+            var __VLS_869;
+            var __VLS_853;
+            var __VLS_849;
+        }
+        if (String(__VLS_ctx.taskForm.type) !== '0') {
+            const __VLS_878 = {}.ElFormItem;
+            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            // @ts-ignore
+            const __VLS_879 = __VLS_asFunctionalComponent(__VLS_878, new __VLS_878({
+                prop: "settlementType",
+            }));
+            const __VLS_880 = __VLS_879({
+                prop: "settlementType",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_879));
+            __VLS_881.slots.default;
+            {
+                const { label: __VLS_thisSlot } = __VLS_881.slots;
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-settlement-label" },
+                });
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
+                const __VLS_882 = {}.ElTooltip;
+                /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
+                // @ts-ignore
+                const __VLS_883 = __VLS_asFunctionalComponent(__VLS_882, new __VLS_882({
+                    effect: "dark",
+                    placement: "top",
+                    rawContent: true,
+                    content: "自动结算：累计用时达到计划时，自动标记为完成；<br />手动结算：需要用户点击‘完成’按钮才会标记为完成",
+                }));
+                const __VLS_884 = __VLS_883({
+                    effect: "dark",
+                    placement: "top",
+                    rawContent: true,
+                    content: "自动结算：累计用时达到计划时，自动标记为完成；<br />手动结算：需要用户点击‘完成’按钮才会标记为完成",
+                }, ...__VLS_functionalComponentArgsRest(__VLS_883));
+                __VLS_885.slots.default;
+                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
+                    ...{ class: "task-settlement-help" },
+                    'aria-label': "结算模式说明",
+                });
+                var __VLS_885;
+            }
+            const __VLS_886 = {}.ElSelect;
+            /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
+            // @ts-ignore
+            const __VLS_887 = __VLS_asFunctionalComponent(__VLS_886, new __VLS_886({
+                modelValue: (__VLS_ctx.taskForm.settlementType),
+                ...{ class: "w-full" },
+            }));
+            const __VLS_888 = __VLS_887({
+                modelValue: (__VLS_ctx.taskForm.settlementType),
+                ...{ class: "w-full" },
+            }, ...__VLS_functionalComponentArgsRest(__VLS_887));
+            __VLS_889.slots.default;
+            for (const [option] of __VLS_getVForSourceType((__VLS_ctx.settlementTypeOptions))) {
+                const __VLS_890 = {}.ElOption;
+                /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
+                // @ts-ignore
+                const __VLS_891 = __VLS_asFunctionalComponent(__VLS_890, new __VLS_890({
+                    key: (option.value),
+                    label: (option.label),
+                    value: (option.value),
+                }));
+                const __VLS_892 = __VLS_891({
+                    key: (option.value),
+                    label: (option.label),
+                    value: (option.value),
+                }, ...__VLS_functionalComponentArgsRest(__VLS_891));
+            }
+            var __VLS_889;
+            var __VLS_881;
+        }
+        if (__VLS_ctx.taskDialogParent) {
+            const __VLS_894 = {}.ElFormItem;
+            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
+            // @ts-ignore
+            const __VLS_895 = __VLS_asFunctionalComponent(__VLS_894, new __VLS_894({
+                label: "是否同步时长到父任务",
+                prop: "inheritParentTime",
+            }));
+            const __VLS_896 = __VLS_895({
+                label: "是否同步时长到父任务",
+                prop: "inheritParentTime",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_895));
+            __VLS_897.slots.default;
+            const __VLS_898 = {}.ElSwitch;
+            /** @type {[typeof __VLS_components.ElSwitch, typeof __VLS_components.elSwitch, ]} */ ;
+            // @ts-ignore
+            const __VLS_899 = __VLS_asFunctionalComponent(__VLS_898, new __VLS_898({
+                modelValue: (__VLS_ctx.taskForm.inheritParentTime),
+                activeText: "同步",
+                inactiveText: "不计入",
+            }));
+            const __VLS_900 = __VLS_899({
+                modelValue: (__VLS_ctx.taskForm.inheritParentTime),
+                activeText: "同步",
+                inactiveText: "不计入",
+            }, ...__VLS_functionalComponentArgsRest(__VLS_899));
+            var __VLS_897;
+        }
+    }
+    var __VLS_627;
+}
+{
+    const { footer: __VLS_thisSlot } = __VLS_579.slots;
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
+        ...{ class: "task-dialog-footer" },
+    });
+    const __VLS_902 = {}.ElButton;
+    /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+    // @ts-ignore
+    const __VLS_903 = __VLS_asFunctionalComponent(__VLS_902, new __VLS_902({
+        ...{ 'onClick': {} },
+    }));
+    const __VLS_904 = __VLS_903({
+        ...{ 'onClick': {} },
+    }, ...__VLS_functionalComponentArgsRest(__VLS_903));
+    let __VLS_906;
+    let __VLS_907;
+    let __VLS_908;
+    const __VLS_909 = {
+        onClick: (...[$event]) => {
+            __VLS_ctx.taskDialogVisible = false;
+        }
+    };
+    __VLS_905.slots.default;
+    var __VLS_905;
+    if (__VLS_ctx.taskDialogMode === 'view') {
+    }
+    else {
+        if (__VLS_ctx.isSceneDialog) {
+            const __VLS_910 = {}.ElButton;
+            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
+            // @ts-ignore
+            const __VLS_911 = __VLS_asFunctionalComponent(__VLS_910, new __VLS_910({
+                ...{ 'onClick': {} },
+                type: "warning",
+                loading: (__VLS_ctx.taskDialogLoading),
+            }));
+            const __VLS_912 = __VLS_911({
+                ...{ 'onClick': {} },
+                type: "warning",
+                loading: (__VLS_ctx.taskDialogLoading),
             }, ...__VLS_functionalComponentArgsRest(__VLS_911));
             let __VLS_914;
             let __VLS_915;
             let __VLS_916;
             const __VLS_917 = {
-                'onUpdate:modelValue': (__VLS_ctx.updateEndTimePart)
-            };
-            var __VLS_913;
-            var __VLS_909;
-            var __VLS_893;
-            var __VLS_889;
-        }
-        if (String(__VLS_ctx.taskForm.type) !== '0') {
-            const __VLS_918 = {}.ElFormItem;
-            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
-            // @ts-ignore
-            const __VLS_919 = __VLS_asFunctionalComponent(__VLS_918, new __VLS_918({
-                prop: "settlementType",
-            }));
-            const __VLS_920 = __VLS_919({
-                prop: "settlementType",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_919));
-            __VLS_921.slots.default;
-            {
-                const { label: __VLS_thisSlot } = __VLS_921.slots;
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
-                    ...{ class: "task-settlement-label" },
-                });
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({});
-                const __VLS_922 = {}.ElTooltip;
-                /** @type {[typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, typeof __VLS_components.ElTooltip, typeof __VLS_components.elTooltip, ]} */ ;
-                // @ts-ignore
-                const __VLS_923 = __VLS_asFunctionalComponent(__VLS_922, new __VLS_922({
-                    effect: "dark",
-                    placement: "top",
-                    rawContent: true,
-                    content: "自动结算：累计用时达到计划时，自动标记为完成；<br />手动结算：需要用户点击‘完成’按钮才会标记为完成",
-                }));
-                const __VLS_924 = __VLS_923({
-                    effect: "dark",
-                    placement: "top",
-                    rawContent: true,
-                    content: "自动结算：累计用时达到计划时，自动标记为完成；<br />手动结算：需要用户点击‘完成’按钮才会标记为完成",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_923));
-                __VLS_925.slots.default;
-                __VLS_asFunctionalElement(__VLS_intrinsicElements.span, __VLS_intrinsicElements.span)({
-                    ...{ class: "task-settlement-help" },
-                    'aria-label': "结算模式说明",
-                });
-                var __VLS_925;
-            }
-            const __VLS_926 = {}.ElSelect;
-            /** @type {[typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, typeof __VLS_components.ElSelect, typeof __VLS_components.elSelect, ]} */ ;
-            // @ts-ignore
-            const __VLS_927 = __VLS_asFunctionalComponent(__VLS_926, new __VLS_926({
-                modelValue: (__VLS_ctx.taskForm.settlementType),
-                ...{ class: "w-full" },
-            }));
-            const __VLS_928 = __VLS_927({
-                modelValue: (__VLS_ctx.taskForm.settlementType),
-                ...{ class: "w-full" },
-            }, ...__VLS_functionalComponentArgsRest(__VLS_927));
-            __VLS_929.slots.default;
-            for (const [option] of __VLS_getVForSourceType((__VLS_ctx.settlementTypeOptions))) {
-                const __VLS_930 = {}.ElOption;
-                /** @type {[typeof __VLS_components.ElOption, typeof __VLS_components.elOption, ]} */ ;
-                // @ts-ignore
-                const __VLS_931 = __VLS_asFunctionalComponent(__VLS_930, new __VLS_930({
-                    key: (option.value),
-                    label: (option.label),
-                    value: (option.value),
-                }));
-                const __VLS_932 = __VLS_931({
-                    key: (option.value),
-                    label: (option.label),
-                    value: (option.value),
-                }, ...__VLS_functionalComponentArgsRest(__VLS_931));
-            }
-            var __VLS_929;
-            var __VLS_921;
-        }
-        if (__VLS_ctx.taskDialogParent) {
-            const __VLS_934 = {}.ElFormItem;
-            /** @type {[typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, typeof __VLS_components.ElFormItem, typeof __VLS_components.elFormItem, ]} */ ;
-            // @ts-ignore
-            const __VLS_935 = __VLS_asFunctionalComponent(__VLS_934, new __VLS_934({
-                label: "是否同步时长到父任务",
-                prop: "inheritParentTime",
-            }));
-            const __VLS_936 = __VLS_935({
-                label: "是否同步时长到父任务",
-                prop: "inheritParentTime",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_935));
-            __VLS_937.slots.default;
-            const __VLS_938 = {}.ElSwitch;
-            /** @type {[typeof __VLS_components.ElSwitch, typeof __VLS_components.elSwitch, ]} */ ;
-            // @ts-ignore
-            const __VLS_939 = __VLS_asFunctionalComponent(__VLS_938, new __VLS_938({
-                modelValue: (__VLS_ctx.taskForm.inheritParentTime),
-                activeText: "同步",
-                inactiveText: "不计入",
-            }));
-            const __VLS_940 = __VLS_939({
-                modelValue: (__VLS_ctx.taskForm.inheritParentTime),
-                activeText: "同步",
-                inactiveText: "不计入",
-            }, ...__VLS_functionalComponentArgsRest(__VLS_939));
-            var __VLS_937;
-        }
-    }
-    var __VLS_667;
-}
-{
-    const { footer: __VLS_thisSlot } = __VLS_619.slots;
-    __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
-        ...{ class: "task-dialog-footer" },
-    });
-    const __VLS_942 = {}.ElButton;
-    /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-    // @ts-ignore
-    const __VLS_943 = __VLS_asFunctionalComponent(__VLS_942, new __VLS_942({
-        ...{ 'onClick': {} },
-    }));
-    const __VLS_944 = __VLS_943({
-        ...{ 'onClick': {} },
-    }, ...__VLS_functionalComponentArgsRest(__VLS_943));
-    let __VLS_946;
-    let __VLS_947;
-    let __VLS_948;
-    const __VLS_949 = {
-        onClick: (...[$event]) => {
-            __VLS_ctx.taskDialogVisible = false;
-        }
-    };
-    __VLS_945.slots.default;
-    var __VLS_945;
-    if (__VLS_ctx.taskDialogMode === 'view') {
-    }
-    else {
-        if (__VLS_ctx.isSceneDialog) {
-            const __VLS_950 = {}.ElButton;
-            /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
-            // @ts-ignore
-            const __VLS_951 = __VLS_asFunctionalComponent(__VLS_950, new __VLS_950({
-                ...{ 'onClick': {} },
-                type: "warning",
-                loading: (__VLS_ctx.taskDialogLoading),
-            }));
-            const __VLS_952 = __VLS_951({
-                ...{ 'onClick': {} },
-                type: "warning",
-                loading: (__VLS_ctx.taskDialogLoading),
-            }, ...__VLS_functionalComponentArgsRest(__VLS_951));
-            let __VLS_954;
-            let __VLS_955;
-            let __VLS_956;
-            const __VLS_957 = {
                 onClick: (__VLS_ctx.submitTaskDialog)
             };
-            __VLS_953.slots.default;
-            var __VLS_953;
+            __VLS_913.slots.default;
+            var __VLS_913;
         }
         else {
             if (__VLS_ctx.taskDialogStep > 0) {
-                const __VLS_958 = {}.ElButton;
+                const __VLS_918 = {}.ElButton;
                 /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
                 // @ts-ignore
-                const __VLS_959 = __VLS_asFunctionalComponent(__VLS_958, new __VLS_958({
+                const __VLS_919 = __VLS_asFunctionalComponent(__VLS_918, new __VLS_918({
                     ...{ 'onClick': {} },
                 }));
-                const __VLS_960 = __VLS_959({
+                const __VLS_920 = __VLS_919({
                     ...{ 'onClick': {} },
-                }, ...__VLS_functionalComponentArgsRest(__VLS_959));
-                let __VLS_962;
-                let __VLS_963;
-                let __VLS_964;
-                const __VLS_965 = {
+                }, ...__VLS_functionalComponentArgsRest(__VLS_919));
+                let __VLS_922;
+                let __VLS_923;
+                let __VLS_924;
+                const __VLS_925 = {
                     onClick: (...[$event]) => {
                         if (!!(__VLS_ctx.taskDialogMode === 'view'))
                             return;
@@ -4947,57 +4896,57 @@ if (__VLS_ctx.taskDialogMode !== 'view') {
                         __VLS_ctx.taskDialogStep -= 1;
                     }
                 };
-                __VLS_961.slots.default;
-                var __VLS_961;
+                __VLS_921.slots.default;
+                var __VLS_921;
             }
             if (__VLS_ctx.taskDialogStep === 0) {
-                const __VLS_966 = {}.ElButton;
+                const __VLS_926 = {}.ElButton;
                 /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
                 // @ts-ignore
-                const __VLS_967 = __VLS_asFunctionalComponent(__VLS_966, new __VLS_966({
+                const __VLS_927 = __VLS_asFunctionalComponent(__VLS_926, new __VLS_926({
                     ...{ 'onClick': {} },
                     type: "warning",
                 }));
-                const __VLS_968 = __VLS_967({
+                const __VLS_928 = __VLS_927({
                     ...{ 'onClick': {} },
                     type: "warning",
-                }, ...__VLS_functionalComponentArgsRest(__VLS_967));
-                let __VLS_970;
-                let __VLS_971;
-                let __VLS_972;
-                const __VLS_973 = {
+                }, ...__VLS_functionalComponentArgsRest(__VLS_927));
+                let __VLS_930;
+                let __VLS_931;
+                let __VLS_932;
+                const __VLS_933 = {
                     onClick: (__VLS_ctx.goTaskDialogNext)
                 };
-                __VLS_969.slots.default;
-                var __VLS_969;
+                __VLS_929.slots.default;
+                var __VLS_929;
             }
             else {
-                const __VLS_974 = {}.ElButton;
+                const __VLS_934 = {}.ElButton;
                 /** @type {[typeof __VLS_components.ElButton, typeof __VLS_components.elButton, typeof __VLS_components.ElButton, typeof __VLS_components.elButton, ]} */ ;
                 // @ts-ignore
-                const __VLS_975 = __VLS_asFunctionalComponent(__VLS_974, new __VLS_974({
+                const __VLS_935 = __VLS_asFunctionalComponent(__VLS_934, new __VLS_934({
                     ...{ 'onClick': {} },
                     type: "warning",
                     loading: (__VLS_ctx.taskDialogLoading),
                 }));
-                const __VLS_976 = __VLS_975({
+                const __VLS_936 = __VLS_935({
                     ...{ 'onClick': {} },
                     type: "warning",
                     loading: (__VLS_ctx.taskDialogLoading),
-                }, ...__VLS_functionalComponentArgsRest(__VLS_975));
-                let __VLS_978;
-                let __VLS_979;
-                let __VLS_980;
-                const __VLS_981 = {
+                }, ...__VLS_functionalComponentArgsRest(__VLS_935));
+                let __VLS_938;
+                let __VLS_939;
+                let __VLS_940;
+                const __VLS_941 = {
                     onClick: (__VLS_ctx.submitTaskDialog)
                 };
-                __VLS_977.slots.default;
-                var __VLS_977;
+                __VLS_937.slots.default;
+                var __VLS_937;
             }
         }
     }
 }
-var __VLS_619;
+var __VLS_579;
 /** @type {__VLS_StyleScopedClasses['home-shell']} */ ;
 /** @type {__VLS_StyleScopedClasses['sidebar']} */ ;
 /** @type {__VLS_StyleScopedClasses['brand']} */ ;
@@ -5027,11 +4976,11 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['task-type-icon']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-type-icon-note']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-node-desc']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-run-toggle']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock-bar']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta-inline']} */ ;
+/** @type {__VLS_StyleScopedClasses['clock-progress-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-subdivide']} */ ;
 /** @type {__VLS_StyleScopedClasses['section-toolbar']} */ ;
@@ -5054,11 +5003,11 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['task-type-icon']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-type-icon-note']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-node-desc']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-run-toggle']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock-bar']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta-inline']} */ ;
+/** @type {__VLS_StyleScopedClasses['clock-progress-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-subdivide']} */ ;
 /** @type {__VLS_StyleScopedClasses['panel-card']} */ ;
@@ -5081,6 +5030,7 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['task-node-clock']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-run-toggle']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock-bar']} */ ;
+/** @type {__VLS_StyleScopedClasses['clock-progress-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-meta']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-subdivide']} */ ;
@@ -5103,12 +5053,12 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['task-type-icon']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-type-icon-note']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-node-desc']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-subdivide']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-run-toggle']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock-bar']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta-inline']} */ ;
+/** @type {__VLS_StyleScopedClasses['clock-progress-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['panel-card']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-split-card']} */ ;
@@ -5128,11 +5078,11 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['task-type-icon']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-type-icon-note']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-title']} */ ;
+/** @type {__VLS_StyleScopedClasses['task-node-desc']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-run-toggle']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-clock-bar']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta']} */ ;
-/** @type {__VLS_StyleScopedClasses['task-node-meta-inline']} */ ;
+/** @type {__VLS_StyleScopedClasses['clock-progress-text']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-node-actions']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-subdivide']} */ ;
 /** @type {__VLS_StyleScopedClasses['review-layout']} */ ;
@@ -5241,7 +5191,7 @@ var __VLS_619;
 /** @type {__VLS_StyleScopedClasses['w-full']} */ ;
 /** @type {__VLS_StyleScopedClasses['task-dialog-footer']} */ ;
 // @ts-ignore
-var __VLS_673 = __VLS_672;
+var __VLS_633 = __VLS_632;
 var __VLS_dollars;
 const __VLS_self = (await import('vue')).defineComponent({
     setup() {
@@ -5268,9 +5218,8 @@ const __VLS_self = (await import('vue')).defineComponent({
             monthDayOptions: monthDayOptions,
             settlementTypeOptions: settlementTypeOptions,
             isHeartbeatTask: isHeartbeatTask,
-            heartbeatPercent: heartbeatPercent,
-            heartbeatTooltip: heartbeatTooltip,
-            runStatusTooltip: runStatusTooltip,
+            progressPercent: progressPercent,
+            clockLabel: clockLabel,
             taskForm: taskForm,
             displayUsername: displayUsername,
             isRecurringTask: isRecurringTask,
