@@ -28,7 +28,6 @@ public class RedisUtils {
     private static final Logger log = LoggerFactory.getLogger(RedisUtils.class);
 
     private final StringRedisTemplate stringRedisTemplate;
-    private final BloomFilter bloomFilter;
 
     private static final String KEY_VERIFY_CODE = "verify:email:%s";
     private static final String KEY_SEND_LIMIT = "limit:send-code:%s";
@@ -36,10 +35,8 @@ public class RedisUtils {
     /** TTL 随机抖动的比例，±20% */
     private static final double JITTER_RATIO = 0.2;
 
-    public RedisUtils(StringRedisTemplate stringRedisTemplate,
-                      BloomFilter bloomFilter) {
+    public RedisUtils(StringRedisTemplate stringRedisTemplate) {
         this.stringRedisTemplate = stringRedisTemplate;
-        this.bloomFilter = bloomFilter;
     }
 
     // 为ttl增加抖动，防止大量key在同一时间过期导致缓存雪崩
@@ -102,6 +99,7 @@ public class RedisUtils {
     }
 
     // 带逻辑过期的缓存获取，适用于热点数据
+    // 其中包含了DB查询，无论如何都会返回数据
     public <T> T getOrRebuild(String key, String lockKey, long logicalTtlSeconds,
                               Class<T> clazz, Supplier<T> loader) {
 

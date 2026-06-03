@@ -1,5 +1,6 @@
 package cn.ppy.mychecklist.aspect;
 
+import cn.ppy.mychecklist.component.BloomFilter;
 import cn.ppy.mychecklist.entity.Task;
 import cn.ppy.mychecklist.entity.TaskLog;
 import cn.ppy.mychecklist.enums.LogResultStatus;
@@ -8,6 +9,7 @@ import cn.ppy.mychecklist.enums.TaskType;
 import cn.ppy.mychecklist.mapper.TaskLogMapper;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.util.CronUtils;
+import cn.ppy.mychecklist.util.RedisUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.annotation.AfterReturning;
 import org.aspectj.lang.annotation.Aspect;
@@ -15,6 +17,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -23,7 +27,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 任务日志切面
+ * 任务日志切面，只有一个功能：
+ * 每天凌晨四点时，NightlyProcessor会调用TaskService.settleRunningTasks()方法处理跨天任务
+ * 这个方法返回后，就会被这个切片拦截，生成前一天的TaskLog记录，并写入数据库和Redis
  */
 @Aspect
 @Component
@@ -35,6 +41,18 @@ public class TaskLogAspect {
 
     @Autowired
     private TaskLogMapper taskLogMapper;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    private RedisUtils redisUtils;
+
+    @Autowired
+    private BloomFilter bloomFilter;
+
+    // Redis相关常量
+    private static final String CACHE_KEY_PREFIX = "taskLog:detail:";
+    private static final long CACHE_TTL_SECONDS = 3600; // 1小时，主要为Review服务，生成完立马使用
 
     // 跨天的时候为所有任务都生成日志，记录任务的执行结果
     @AfterReturning(pointcut = "execution(* ..TaskService.settleRunningTasks(..)) && args(userId)")
@@ -92,6 +110,18 @@ public class TaskLogAspect {
         } else {
             taskLogMapper.insert(taskLog);
         }
+
+        // 把TaskLog写入Redis
+        String cacheKey = CACHE_KEY_PREFIX + taskLog.getLogId();
+        try {
+            String json = objectMapper.writeValueAsString(taskLog);
+            redisUtils.set(cacheKey, json, CACHE_TTL_SECONDS);
+        } catch (JsonProcessingException e) {
+            log.error("TaskLog序列化失败, 无法写入Redis, logId={}", taskLog.getLogId(), e);
+            return;
+        }
+        // 把TaskLog加入布隆过滤器
+        bloomFilter.add(BloomFilter.NS_TASKLOG, String.valueOf(taskLog.getLogId()));
     }
 
     private LogResultStatus calculateResultStatus(Task task, LocalDateTime boundary) {
