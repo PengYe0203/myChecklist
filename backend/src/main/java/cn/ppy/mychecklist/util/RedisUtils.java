@@ -1,5 +1,9 @@
 package cn.ppy.mychecklist.util;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import cn.ppy.mychecklist.component.BloomFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -11,6 +15,9 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Supplier;
 
 /**
  * Redis 工具类
@@ -21,17 +28,32 @@ public class RedisUtils {
     private static final Logger log = LoggerFactory.getLogger(RedisUtils.class);
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final BloomFilter bloomFilter;
 
     private static final String KEY_VERIFY_CODE = "verify:email:%s";
     private static final String KEY_SEND_LIMIT = "limit:send-code:%s";
 
-    public RedisUtils(StringRedisTemplate stringRedisTemplate) {
+    /** TTL 随机抖动的比例，±20% */
+    private static final double JITTER_RATIO = 0.2;
+
+    public RedisUtils(StringRedisTemplate stringRedisTemplate,
+                      BloomFilter bloomFilter) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.bloomFilter = bloomFilter;
+    }
+
+    // 为ttl增加抖动，防止大量key在同一时间过期导致缓存雪崩
+    // ThreadLocalRandom是适合多线程环境的随机数生成器
+    private long jitter(long ttlSeconds) {
+        if (ttlSeconds <= 5) return ttlSeconds;
+        long delta = (long) (ttlSeconds * JITTER_RATIO);
+        long offset = ThreadLocalRandom.current().nextLong(-delta, delta + 1);
+        return Math.max(1, ttlSeconds + offset);
     }
 
     public void set(String key, String value, long ttlSeconds) {
         if (ttlSeconds > 0) {
-            stringRedisTemplate.opsForValue().set(key, value, Duration.ofSeconds(ttlSeconds));
+            stringRedisTemplate.opsForValue().set(key, value, Duration.ofSeconds(jitter(ttlSeconds)));
         } else {
             stringRedisTemplate.opsForValue().set(key, value);
         }
@@ -58,7 +80,7 @@ public class RedisUtils {
 
     public boolean setIfAbsent(String key, String value, long ttlSeconds) {
         if (ttlSeconds > 0) {
-            Boolean res = stringRedisTemplate.opsForValue().setIfAbsent(key, value, Duration.ofSeconds(ttlSeconds));
+            Boolean res = stringRedisTemplate.opsForValue().setIfAbsent(key, value, Duration.ofSeconds(jitter(ttlSeconds)));
             return Boolean.TRUE.equals(res);
         }
         Boolean res = stringRedisTemplate.opsForValue().setIfAbsent(key, value);
@@ -66,7 +88,100 @@ public class RedisUtils {
     }
 
     public void expire(String key, long ttlSeconds) {
-        stringRedisTemplate.expire(key, Duration.ofSeconds(ttlSeconds));
+        stringRedisTemplate.expire(key, Duration.ofSeconds(jitter(ttlSeconds)));
+    }
+
+    // 负责Java对象和Json的相互转换
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // data是实际数据，putAtMillis是放入缓存的时间戳，用于逻辑过期判断
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private static class CacheWrapper {
+        public Object data;
+        public long putAtMillis;
+    }
+
+    // 带逻辑过期的缓存获取，适用于热点数据
+    public <T> T getOrRebuild(String key, String lockKey, long logicalTtlSeconds,
+                              Class<T> clazz, Supplier<T> loader) {
+
+        String cached = get(key);
+        CacheWrapper wrapper = null;
+
+        if (cached != null) {
+            try {
+                wrapper = objectMapper.readValue(cached, CacheWrapper.class);
+            } catch (JsonProcessingException e) {
+                log.error("getOrRebuild deserialize wrapper failed. key={}", key, e);
+            }
+        }
+
+        // 缓存不存在，则加锁、访问DB、创建缓存
+        if (wrapper == null || wrapper.data == null) {
+            boolean locked = setIfAbsent(lockKey, "1", 10);
+            if (locked) { // 成功拿到锁，重建后放入缓存
+                try {
+                    T value = loader.get();
+                    if (value != null) {
+                        CacheWrapper w = new CacheWrapper();
+                        w.data = value;
+                        w.putAtMillis = System.currentTimeMillis();
+                        try {
+                            set(key, objectMapper.writeValueAsString(w), logicalTtlSeconds * 5);
+                        } catch (JsonProcessingException e) {
+                            log.error("getOrRebuild initial serialize failed. key={}", key, e);
+                        }
+                    }
+                    return value;
+                } finally {
+                    delete(lockKey);
+                }
+            }
+            // 无缓存且未拿到锁，直接查询DB并返回
+            return loader.get();
+        }
+
+        // 缓存存在，读取数据进value
+        T value;
+        try {
+            value = objectMapper.convertValue(wrapper.data, clazz); // 把json转换回对象
+        } catch (Exception e) {
+            log.error("getOrRebuild convertValue failed. key={}", key, e);
+            return loader.get();
+        }
+
+        // 判断是否逻辑过期
+        long ageMillis = System.currentTimeMillis() - wrapper.putAtMillis;
+        if (ageMillis > logicalTtlSeconds * 1000L) {
+            // 逻辑过期，加锁并重建缓存
+            final String fKey = key;
+            final String fLockKey = lockKey;
+            final long fTtl = logicalTtlSeconds;
+            final Supplier<T> fLoader = loader;
+            //异步重建，不阻塞当前请求
+            CompletableFuture.runAsync(() -> {
+                boolean locked = setIfAbsent(fLockKey, "1", 10);
+                if (!locked) return;
+                try {
+                    T fresh = fLoader.get();
+                    if (fresh != null) {
+                        CacheWrapper w = new CacheWrapper();
+                        w.data = fresh;
+                        w.putAtMillis = System.currentTimeMillis();
+                        try {
+                            set(fKey, objectMapper.writeValueAsString(w), fTtl * 5);
+                        } catch (JsonProcessingException ex) {
+                            log.error("getOrRebuild async serialize failed. key={}", fKey, ex);
+                        }
+                    }
+                } finally {
+                    delete(fLockKey);
+                }
+            });
+        }
+
+        // 无论是否过期，都返回
+        return value;
     }
 
     // 存邮箱验证码并设置ttl
