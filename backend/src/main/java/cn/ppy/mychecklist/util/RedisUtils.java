@@ -100,6 +100,7 @@ public class RedisUtils {
 
     // 带逻辑过期的缓存获取，适用于热点数据
     // 其中包含了DB查询，无论如何都会返回数据
+    // 返回的数据会经过ObjectMapper处理为Java对象，调用者直接使用即可
     public <T> T getOrRebuild(String key, String lockKey, long logicalTtlSeconds,
                               Class<T> clazz, Supplier<T> loader) {
 
@@ -114,7 +115,7 @@ public class RedisUtils {
             }
         }
 
-        // 缓存不存在，则加锁、访问DB、创建缓存
+        // 缓存不存在，则加锁、访问DB、创建缓存，并返回DB查询结果
         if (wrapper == null || wrapper.data == null) {
             boolean locked = setIfAbsent(lockKey, "1", 10);
             if (locked) { // 成功拿到锁，重建后放入缓存

@@ -10,4 +10,5 @@ public interface TaskLogService extends IService<TaskLog> {
     
     List<TaskLog> getLogsByDate(Long userId, LocalDate date);
 
+    TaskLog getById(Long taskLogId);
 }
