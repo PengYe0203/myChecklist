@@ -7,6 +7,8 @@ import cn.ppy.mychecklist.service.ReviewService;
 import cn.ppy.mychecklist.service.TaskService;
 import cn.ppy.mychecklist.service.UserService;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 夜间处理器，负责定时执行一些需要在夜间进行的维护任务
@@ -33,18 +36,46 @@ public class NightlyProcessor {
     @Autowired
     private ReviewService reviewService;
 
+    @Autowired
+    private RedissonClient redissonClient;
+
+    private static final String NIGHTLY_LOCK_KEY = "lock:nightly-batch";
+    private static final long LOCK_WAIT_SECONDS = 5;
+    private static final long LOCK_LEASE_SECONDS = 300; // 5分钟自动释放，防止死锁
+
     @Scheduled(cron = "0 0 4 * * *")
     public void executeNightlyBatch() {
-        log.info("开始执行夜间批处理任务 - {}", LocalDateTime.now());
-        LocalDate yesterday = LocalDate.now().minusDays(1);
+        RLock lock = redissonClient.getLock(NIGHTLY_LOCK_KEY);
+        boolean acquired = false;
+        try {
+            acquired = lock.tryLock(LOCK_WAIT_SECONDS, LOCK_LEASE_SECONDS, TimeUnit.SECONDS);
+            if (!acquired) {
+                log.info("夜间批处理任务已被其他实例执行，跳过");
+                return;
+            }
 
-        // 处理所有用户的跨天任务结算并生成昨日报告
-        settleAndReportAllUsers(yesterday);
+            log.info("开始执行夜间批处理任务 - {}", LocalDateTime.now());
+            LocalDate yesterday = LocalDate.now().minusDays(1);
 
-        // 刷新周期任务
-        processRecurringTasks();
+            // 处理所有用户的跨天任务结算并生成昨日报告
+            settleAndReportAllUsers(yesterday);
 
-        log.info("夜间批处理任务执行完毕");
+            // 刷新周期任务
+            processRecurringTasks();
+
+            log.info("夜间批处理任务执行完毕");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("夜间批处理任务获取锁被中断");
+        } finally {
+            if (acquired) {
+                try {
+                    lock.unlock();
+                } catch (Exception e) {
+                    log.warn("释放夜间批处理分布式锁失败", e);
+                }
+            }
+        }
     }
 
     private void settleAndReportAllUsers(LocalDate yesterday) {
