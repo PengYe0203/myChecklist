@@ -3,6 +3,7 @@ package cn.ppy.mychecklist.util;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -89,7 +90,8 @@ public class RedisUtils {
     }
 
     // 负责Java对象和Json的相互转换
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
 
     // data是实际数据，putAtMillis是放入缓存的时间戳，用于逻辑过期判断
     @JsonIgnoreProperties(ignoreUnknown = true)
