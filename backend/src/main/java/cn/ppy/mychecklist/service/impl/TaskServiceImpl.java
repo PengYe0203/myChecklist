@@ -240,8 +240,10 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     @Override
     @Transactional
     public void toggleActive(Long taskId, boolean active) {
-        //这是Controller调用的方法
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
+        Task task = context.getTask(taskId);
+        if (task == null) return;
+        if (task.isActive() == active) return; // 已是目标状态
         cascadeActive(taskId, active, context);
         this.updateBatchById(context.getModifiedTasks());
     }
@@ -267,7 +269,11 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (task == null || task.getType() == TaskType.SCENE) return;
 
         RunStatusType curStatus = task.getRunStatus();
+        if (curStatus == newStatus) return; // 状态未变，不处理
         LocalDateTime now = LocalDateTime.now();
+
+        // 行级锁：串行化同任务的 toggleRunStatus 和 heartbeat
+        query().eq("task_id", taskId).last("FOR UPDATE").one();
 
         if (curStatus == RunStatusType.IN_PROGRESS && newStatus != RunStatusType.IN_PROGRESS) {
             // 级联停止所有子项
@@ -398,6 +404,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         Task task = context.getTask(taskId);
         if (task == null || task.getRunStatus() != RunStatusType.IN_PROGRESS || task.getType() == TaskType.SCENE) return;
 
+        // 行级锁：串行化同任务的 toggleRunStatus 和 heartbeat
+        query().eq("task_id", taskId).last("FOR UPDATE").one();
+
         LocalDateTime now = LocalDateTime.now();
         long seconds = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
 
@@ -449,11 +458,19 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     public String toggleComplete(Long taskId, boolean complete) {
         TaskTreeContext context = new TaskTreeContext(this.getCurrentUserId());
         Task task = context.getTask(taskId);
-        if(task == null || task.getType() == TaskType.SCENE) return "任务不存在"; 
+        if(task == null || task.getType() == TaskType.SCENE) return "任务不存在";
+
+        // 幂等：已是目标状态则跳过
+        if (task.getIsCompleted() != null && task.getIsCompleted() == complete) {
+            return complete ? "已完成" : "已撤回";
+        }
+
+        // 行级锁：heartbeat 可能并发调用 toggleComplete(true)
+        query().eq("task_id", taskId).last("FOR UPDATE").one();
 
         processComplete(task, complete, context); //处理本节点
 
-        String feedback = complete ? "已完成" : "已重置";
+        String feedback = complete ? "已完成" : "已撤回";
 
         if(complete) {
             //向下级联：如果手动完成了一个父任务，强制完成其所有子任务
