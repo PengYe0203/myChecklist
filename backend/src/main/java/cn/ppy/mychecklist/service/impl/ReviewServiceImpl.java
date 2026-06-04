@@ -9,9 +9,16 @@ import cn.ppy.mychecklist.mapper.TaskLogMapper;
 import cn.ppy.mychecklist.mapper.TaskMapper;
 import cn.ppy.mychecklist.model.ReviewAggregateVo;
 import cn.ppy.mychecklist.service.ReviewService;
+import cn.ppy.mychecklist.component.BloomFilter;
+import cn.ppy.mychecklist.util.RedisUtils;
+import lombok.extern.slf4j.Slf4j;
+
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +31,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> implements ReviewService {
 
@@ -33,6 +41,23 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
     @Autowired
     private TaskLogMapper taskLogMapper;
 
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private RedisUtils redisUtils;
+
+    @Autowired
+    private BloomFilter bloomFilter;
+
+    private static final String CACHE_KEY_PREFIX = "review:detail:";
+    private static final long CACHE_TTL_SECONDS = 86400; // 1天，供用户第二天查看
+
+    private String detailKey(Long userId, LocalDate date) {
+        return CACHE_KEY_PREFIX + userId + ":" + date.toString();
+    }
+
+    // 每日定时生成前一天的Review，统计当天的任务完成情况和时间分布等数据
     @Override
     @Transactional
     public void generateDailyReport(LocalDate date, Long userId) {
@@ -57,8 +82,8 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         // 片段格式为 [[s1,e1],[s2,e2]]
         Pattern p = Pattern.compile("\\[(\\d+),(\\d+)\\]");
         
-        for (TaskLog log : logs) {
-            LogResultStatus status = log.getResultStatus();
+        for (TaskLog taskLog : logs) {
+            LogResultStatus status = taskLog.getResultStatus();
             if (status == LogResultStatus.COMPLETED || status == LogResultStatus.LATE_COMPLETED) {
                 doneCount++;
             }
@@ -66,15 +91,15 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
             if (status != LogResultStatus.DEFERRED) {
                 requiredCount++;
                 // 计划总时和实际总时（仅统计需要完成的任务）
-                int dailyActual = log.getDailyActualDuration() != null ? log.getDailyActualDuration() : 0;
+                int dailyActual = taskLog.getDailyActualDuration() != null ? taskLog.getDailyActualDuration() : 0;
                 // 在今天完成的长周期和ddl任务也会进到这里，因此需要特别处理
-                int dailyTarget = calculateDailyTarget(log);
+                int dailyTarget = calculateDailyTarget(taskLog);
                 actualSum += Math.min(dailyActual, dailyTarget);
                 targetSum += dailyTarget;
             }
 
             // 收集并处理时间分布片段
-            String segmentsJson = log.getWorkSegments();
+            String segmentsJson = taskLog.getWorkSegments();
             if (segmentsJson != null && !segmentsJson.isEmpty() && !segmentsJson.equals("[]")) {
                 Matcher m = p.matcher(segmentsJson);
                 while (m.find()) {
@@ -120,6 +145,7 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
             review = initReview(date, userId);
         }
 
+        //写入数据
         review.setDoneCount(doneCount);
         review.setTotalCount(requiredCount);
         review.setActualDurationSum(actualSum);
@@ -128,24 +154,36 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         review.setNetFocusTime((int) netFocusTime);
         review.setTimeDistribution(distribution);
         review.setStreakDays(streak);
-
+        //存进DB
         this.saveOrUpdate(review);
+
+        //写入Redis和布隆过滤器
+        String cacheKey = detailKey(userId, date);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(review);
+            redisUtils.set(cacheKey, json, CACHE_TTL_SECONDS);
+        } catch (JsonProcessingException e) {
+            log.error("序列化失败, 未写入Redis, userId={}, date={}", userId, date, e);
+        }
+        bloomFilter.add(BloomFilter.NS_REVIEW, userId + ":" + date.toString());
 
         // 清空该用户所有任务的片段记录
         clearAllTaskSegments(userId);
     }
 
-    private int calculateDailyTarget(TaskLog log) {
-        int planned = log.getPlannedDuration() == null ? 0 : log.getPlannedDuration();
-        int actual = log.getActualDuration() == null ? 0 : log.getActualDuration();
-        int dailyActual = log.getDailyActualDuration() == null ? 0 : log.getDailyActualDuration();
+    // 对于长周期任务和ddl任务，当天的目标时长为剩余时长
+    private int calculateDailyTarget(TaskLog taskLog) {
+        int planned = taskLog.getPlannedDuration() == null ? 0 : taskLog.getPlannedDuration();
+        int actual = taskLog.getActualDuration() == null ? 0 : taskLog.getActualDuration();
+        int dailyActual = taskLog.getDailyActualDuration() == null ? 0 : taskLog.getDailyActualDuration();
 
         int remaining = planned - Math.max(actual - dailyActual, 0);
         return Math.max(remaining, 0);
     }
 
+    // 把该用户所有的时间片段重置
     private void clearAllTaskSegments(Long userId) {
-        // 把该用户所有的时间片段重置
         taskMapper.update(null, new LambdaUpdateWrapper<Task>()
                 .set(Task::getCurrentDaySegments, "[]")
                 .eq(Task::getUserId, userId)
@@ -180,30 +218,87 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
 
     @Override
     public Review getByDate(LocalDate date, Long currentUserId) {
-        Review review = this.lambdaQuery()
-                .eq(Review::getUserId, currentUserId)
-                .eq(Review::getDate, date)
-                .one();
-        return review;
+        // 先查布隆过滤器，快速判断是否可能存在
+        if (!bloomFilter.mightContain(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString())) {
+            return null;
+        }
+
+        // 从Redis获取
+        String cacheKey = detailKey(currentUserId, date);
+        String lockKey = "lock:" + cacheKey; //逻辑过期用到的分布式锁
+
+        return redisUtils.getOrRebuild(
+                cacheKey, lockKey, CACHE_TTL_SECONDS,
+                Review.class,
+                () -> {
+                    // loader.get()的内容，缓存不存在或过期时执行
+                    Review queryResult = this.lambdaQuery()
+                            .eq(Review::getUserId, currentUserId)
+                            .eq(Review::getDate, date)
+                            .one();
+                    if(queryResult != null) { // 写入布隆过滤器
+                        bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString());
+                    }
+                    return queryResult;
+                });
     }
 
     @Override
     public List<Review> getAll(Long currentUserId) {
-        List<Review> reviews = this.lambdaQuery()
-                .eq(Review::getUserId, currentUserId)
-                .orderByDesc(Review::getDate)
-                .list();
-        return reviews;
+        String cacheKey = "review:list:" + currentUserId;
+        String lockKey = "lock:" + cacheKey;
+
+        ReviewListResult result = redisUtils.getOrRebuild(
+                cacheKey, lockKey, CACHE_TTL_SECONDS,
+                ReviewListResult.class,
+                () -> {
+                    List<Review> queryResult = this.lambdaQuery()
+                            .eq(Review::getUserId, currentUserId)
+                            .orderByDesc(Review::getDate)
+                            .list();
+
+                    for(Review review : queryResult) {
+                        bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + review.getDate().toString());
+                    }
+
+                    ReviewListResult wrapper = new ReviewListResult();
+                    wrapper.reviews = queryResult;
+                    return wrapper;
+                }
+        );
+
+        return result != null ? result.reviews : null;
     }
 
     @Override
     public String editReview(LocalDate date, String content, Long currentUserId) {
-        Review review = this.getByDate(date, currentUserId);
-        if (review == null) {
-            // 创建一个仅有日期和用户id的空记录
+        Review review;
+        
+        //布隆过滤器判空
+        if (!bloomFilter.mightContain(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString())) {
             review = initReview(date, currentUserId);
+            review.setContent(content);
+        }else{
+            String cacheKey = detailKey(currentUserId, date);
+            String lockKey = "lock:" + cacheKey;
+            review = redisUtils.getOrRebuild(
+                    cacheKey, lockKey, CACHE_TTL_SECONDS,
+                    Review.class,
+                    () -> {
+                        Review queryResult = this.lambdaQuery()
+                                .eq(Review::getUserId, currentUserId)
+                                .eq(Review::getDate, date)
+                                .one();
+                        if(queryResult == null) {
+                            queryResult = initReview(date, currentUserId);
+                        }
+                        queryResult.setContent(content); //这里就要写入，否则Redis中没有content
+                        return queryResult;
+                    }
+            );
         }
-        review.setContent(content);
+        bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString());
+
         return this.updateById(review)? "更新成功": "更新失败";
     }
 
@@ -260,5 +355,10 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         aggregate.setStreakDistribution(streakDistribution);
 
         return aggregate;
+    }
+
+    @SuppressWarnings("unused")
+    private static class ReviewListResult {
+        public List<Review> reviews;
     }
 }

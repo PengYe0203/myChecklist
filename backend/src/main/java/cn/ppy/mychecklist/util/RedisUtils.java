@@ -3,9 +3,9 @@ package cn.ppy.mychecklist.util;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import cn.ppy.mychecklist.component.BloomFilter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.ReturnType;
 import org.springframework.data.redis.core.RedisCallback;
@@ -23,9 +23,9 @@ import java.util.function.Supplier;
  * Redis 工具类
  * 管理 key 前缀、TTL 与常用原子操作
  */
+@Slf4j
 @Component
 public class RedisUtils {
-    private static final Logger log = LoggerFactory.getLogger(RedisUtils.class);
 
     private final StringRedisTemplate stringRedisTemplate;
 
