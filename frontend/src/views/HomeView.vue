@@ -105,6 +105,27 @@
         </el-tree>
       </section>
 
+      <section v-if="activeSection === 'today'" class="review-editor-card panel-card" style="margin-top: 18px;">
+        <div class="panel-head">
+          <div>
+            <h3>今日总结</h3>
+          </div>
+          <div class="panel-head-actions">
+            <el-button plain @click="saveDraft">保存草稿</el-button>
+            <el-button type="warning" :loading="savingReview" @click="saveReviewToServer">保存</el-button>
+          </div>
+        </div>
+
+        <el-input
+          v-model="reviewDraft"
+          type="textarea"
+          :rows="11"
+          maxlength="2000"
+          show-word-limit
+          placeholder="写下今天的 review content..."
+        />
+      </section>
+
       <div v-if="activeSection === 'todo'" class="section-toolbar section-toolbar-left">
         <el-button type="warning" @click="openCreateTaskDialog()">新建任务</el-button>
         <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
@@ -410,40 +431,14 @@
       </section>
 
       <section v-if="activeSection === 'review'" class="review-layout">
-        <div class="panel-card review-editor-card">
-          <div class="panel-head">
-            <div>
-              <h3>今日总结</h3>
-              <p>先写草稿，自动保存在本地；确定后再同步到后端。</p>
-            </div>
-            <div class="panel-head-actions">
-              <el-button plain @click="saveDraft">保存草稿</el-button>
-              <el-button type="warning" :loading="savingReview" @click="saveReviewToServer">保存到后端</el-button>
-            </div>
-          </div>
-
-          <el-input
-            v-model="reviewDraft"
-            type="textarea"
-            :rows="11"
-            maxlength="2000"
-            show-word-limit
-            placeholder="写下今天的 review content..."
-          />
-
-          <div class="review-tips">
-            当前草稿会自动保存到本地浏览器，后续你接入 Redis 后可以无缝迁移为服务端草稿。
-          </div>
-        </div>
-
         <div class="review-grid">
           <div class="panel-card review-history-card">
             <div class="panel-head">
               <div>
-                <h3>历史 review</h3>
-                <p>点击任意条目查看详情。</p>
+                <h3>历史回顾</h3>
+                <p style="font-size: 0.8rem">点击任意条目查看详情</p>
               </div>
-              <el-button link type="warning" @click="loadReviews">刷新</el-button>
+              <el-button type="warning" @click="loadReviews">刷新</el-button>
             </div>
 
             <el-empty v-if="!reviewHistory.length" description="还没有历史回顾" />
@@ -479,36 +474,89 @@
             <template v-if="selectedReview">
               <div class="detail-grid">
                 <div class="detail-item">
-                  <span>完成</span>
-                  <strong>{{ selectedReview.doneCount ?? 0 }}</strong>
+                  <span>完成任务 / 任务总数</span>
+                  <strong>{{ selectedReview.doneCount ?? 0 }} / {{ selectedReview.totalCount ?? 0 }}</strong>
                 </div>
                 <div class="detail-item">
-                  <span>总任务</span>
-                  <strong>{{ selectedReview.totalCount ?? 0 }}</strong>
+                  <span>实际用时 / 计划用时</span>
+                  <strong>{{ formatDuration(selectedReview.actualDurationSum) }} / {{ formatDuration(selectedReview.plannedDurationSum) }}</strong>
                 </div>
+              </div>
+              <div class="detail-grid">
                 <div class="detail-item">
-                  <span>净专注</span>
+                  <span>净时长</span>
                   <strong>{{ formatDuration(selectedReview.netFocusTime) }}</strong>
                 </div>
                 <div class="detail-item">
-                  <span>实际投入</span>
-                  <strong>{{ formatDuration(selectedReview.actualDurationSum) }}</strong>
+                  <span>总时长</span>
+                  <strong>{{formatDuration(selectedReview.grossEffort)}}</strong>
+                </div>
+              </div>
+
+              <div class="detail-block" v-if="selectedReview.timeDistribution">
+                <div class="detail-block-label">时间分布</div>
+                <div class="heatmap-grid">
+                  <div
+                    v-for="(row, rowIdx) in timeDistHeatmapRows"
+                    :key="rowIdx"
+                    class="heatmap-row"
+                  >
+                    <span class="heatmap-row-label">{{ heatmapRowRange(rowIdx) }}</span>
+                    <div
+                      v-for="(seg, colIdx) in row"
+                      :key="colIdx"
+                      class="heatmap-seg"
+                      :class="{ 'is-active': seg.active }"
+                      :title="seg.label"
+                    />
+                  </div>
                 </div>
               </div>
 
               <div class="detail-block">
-                <div class="detail-block-label">review content</div>
+                <div class="detail-block-label">当日总结</div>
                 <pre class="detail-pre">{{ selectedReview.content || '暂无内容' }}</pre>
               </div>
 
-              <div class="detail-block" v-if="selectedReview.timeDistribution">
-                <div class="detail-block-label">time distribution</div>
-                <pre class="detail-pre">{{ prettyJson(selectedReview.timeDistribution) }}</pre>
+              <div class="detail-footer">
+                <el-tag type="warning">已坚持天数:  {{ selectedReview.streakDays ?? 0 }} 天</el-tag>
               </div>
 
-              <div class="detail-footer">
-                <el-tag type="warning">连续 {{ selectedReview.streakDays ?? 0 }} 天</el-tag>
-                <el-tag type="info">毛时长 {{ formatDuration(selectedReview.grossEffort) }}</el-tag>
+              <!-- TaskLog 列表 -->
+              <div class="detail-block tasklog-section">
+                <div class="detail-block-label">
+                  <span>任务日志</span>
+                  <span v-if="taskLogs.length" class="tasklog-count">（{{ taskLogs.length }} 条）</span>
+                </div>
+                <div v-if="loadingTaskLogs" class="tasklog-loading">加载中...</div>
+                <el-empty v-else-if="!taskLogs.length" description="该日期暂无任务日志" :image-size="40" />
+                <div v-else class="tasklog-list">
+                  <button
+                    v-for="logItem in taskLogs"
+                    :key="logItem.logId"
+                    class="tasklog-item"
+                    @click="openTaskLogDetail(logItem)"
+                  >
+                    <div class="tasklog-item-left">
+                      <el-icon class="task-type-icon task-type-icon-recurring" v-if="String(logItem.type) === '1'">
+                        <Clock />
+                      </el-icon>
+                      <el-icon class="task-type-icon task-type-icon-ddl" v-else-if="String(logItem.type) === '2'">
+                        <Calendar />
+                      </el-icon>
+                      <el-icon class="task-type-icon task-type-icon-note" v-else>
+                        <Document />
+                      </el-icon>
+                      <span class="tasklog-item-title">{{ logItem.title }}</span>
+                    </div>
+                    <div class="tasklog-item-right">
+                      <span :class="['tasklog-result-tag', resultStatusClass(logItem.resultStatus)]">
+                        {{ resultStatusLabel(logItem.resultStatus) }}
+                      </span>
+                      <span class="tasklog-duration">{{ formatDuration(logItem.dailyActualDuration) }}</span>
+                    </div>
+                  </button>
+                </div>
               </div>
             </template>
 
@@ -948,6 +996,7 @@ import {
   type TaskItem,
 } from '@/api/task';
 import { editReviewApi, getAllReviewsApi, type ReviewItem } from '@/api/review';
+import { getTaskLogsByDateApi, type TaskLogItem } from '@/api/taskLog';
 
 type SectionKey = 'today' | 'todo' | 'all' | 'review';
 type RecurrenceMode = 'interval' | 'weekly' | 'monthly';
@@ -1019,6 +1068,10 @@ const reviewHistory = ref<ReviewItem[]>([]);
 const selectedReviewId = ref<number | null>(null);
 const reviewDraft = ref('');
 const recurringTaskDraft = ref<RecurringTaskDraft | null>(null);
+const taskLogs = ref<TaskLogItem[]>([]);
+const loadingTaskLogs = ref(false);
+const taskLogDetailVisible = ref(false);
+const selectedTaskLog = ref<TaskLogItem | null>(null);
 
 const taskTypeOptions: Array<{ label: string; value: number }> = [
   { label: '随手记', value: 0 },
@@ -1520,7 +1573,7 @@ const sectionMeta = {
   today: { label: '今日任务', badge: 'TODAY FOCUS', description: '完成时间在今日且仍处于激活中的任务。' },
   todo: { label: '待办任务', badge: 'TODO LIST', description: '未完成且激活的任务，按今日和后续分组。' },
   all: { label: '全部任务', badge: 'ALL TASKS', description: '' },
-  review: { label: '回顾', badge: 'DAILY REVIEW', description: '今日总结草稿 + 历史 review 详情。' },
+  review: { label: '历史回顾', badge: 'DAILY REVIEW', description: '今日总结草稿 + 历史 review 详情。' },
 } as const;
 
 const todayKey = computed(() => formatBusinessDateKey(new Date()));
@@ -1570,6 +1623,69 @@ const currentTaskTree = computed(() => {
 });
 
 const selectedReview = computed(() => reviewHistory.value.find((item) => item.reviewId === selectedReviewId.value) ?? null);
+
+const timeDistHeatmapRows = computed(() => {
+  const review = selectedReview.value;
+  if (!review?.timeDistribution) return [];
+
+  let segments: Array<[number, number]>;
+  try {
+    segments = JSON.parse(review.timeDistribution);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(segments) || segments.length === 0) return [];
+
+  const totalSeconds = 24 * 3600; // 86400
+  const bucketMinutes = 10;
+  const bucketSize = bucketMinutes * 60; // 600 秒
+  const bucketsPerRow = (60 / bucketMinutes) * 4; // 每行 4 小时 = 24 格
+  const rowCount = 6;
+  const bucketCount = rowCount * bucketsPerRow; // 144 格
+  const dayStartOffset = 4 * 3600; // 凌晨 4:00 为起点
+
+  const activeSet = new Set<number>();
+  for (const seg of segments) {
+    if (!Array.isArray(seg) || seg.length < 2) continue;
+    let [start, end] = [Number(seg[0]), Number(seg[1])];
+    if (isNaN(start) || isNaN(end)) continue;
+    // 数据以 4:00 为 0，对齐 buckets
+    const clampedEnd = Math.min(end, totalSeconds);
+    const clampedStart = Math.max(0, start);
+    if (clampedStart >= clampedEnd) continue;
+    const firstBucket = Math.floor(clampedStart / bucketSize);
+    const lastBucket = Math.min(Math.floor((clampedEnd - 1) / bucketSize), bucketCount - 1);
+    for (let b = firstBucket; b <= lastBucket; b++) {
+      activeSet.add(b);
+    }
+  }
+
+  const rows: Array<Array<{ active: boolean; label: string }>> = [];
+  for (let r = 0; r < rowCount; r++) {
+    const row: Array<{ active: boolean; label: string }> = [];
+    for (let c = 0; c < bucketsPerRow; c++) {
+      const idx = r * bucketsPerRow + c;
+      const segStart = (idx * bucketSize + dayStartOffset) % totalSeconds;
+      const h = Math.floor(segStart / 3600);
+      const m = Math.floor((segStart % 3600) / 60);
+      row.push({
+        active: activeSet.has(idx),
+        label: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+      });
+    }
+    rows.push(row);
+  }
+
+  return rows;
+});
+
+const heatmapRowRange = (rowIdx: number) => {
+  const startHour = (4 + rowIdx * 4) % 24;
+  const endHour = (startHour + 4) % 24;
+  const pad = (n: number) => `${n}`.padStart(2, '0');
+  return `${pad(startHour)}:00-${pad(endHour)}:00`;
+};
 
 const resetTaskDialog = () => {
   Object.assign(taskForm, createDefaultTaskForm());
@@ -1793,7 +1909,7 @@ const saveReviewToServer = async () => {
   try {
     await editReviewApi(todayKey.value, reviewDraft.value);
     syncReviewDraft();
-    ElMessage.success('今日总结已保存到后端');
+    ElMessage.success('今日总结已保存');
     await loadReviews();
   } finally {
     savingReview.value = false;
@@ -1802,6 +1918,48 @@ const saveReviewToServer = async () => {
 
 const selectReview = (review: ReviewItem) => {
   selectedReviewId.value = review.reviewId;
+  loadTaskLogsForReview(review);
+};
+
+const loadTaskLogsForReview = async (review: ReviewItem) => {
+  taskLogs.value = [];
+  loadingTaskLogs.value = true;
+  try {
+    const dateKey = formatDateKey(review.date);
+    const response = await getTaskLogsByDateApi(dateKey);
+    taskLogs.value = response.data || [];
+  } catch {
+    taskLogs.value = [];
+  } finally {
+    loadingTaskLogs.value = false;
+  }
+};
+
+const openTaskLogDetail = (logItem: TaskLogItem) => {
+  selectedTaskLog.value = logItem;
+  taskLogDetailVisible.value = true;
+};
+
+const resultStatusLabel = (status?: number) => {
+  switch (status) {
+    case 0: return '未开始';
+    case 1: return '未完成';
+    case 2: return '完成';
+    case 3: return '超时完成';
+    case 4: return '暂不要求';
+    default: return '-';
+  }
+};
+
+const resultStatusClass = (status?: number) => {
+  switch (status) {
+    case 0: return 'status-unstarted';
+    case 1: return 'status-incomplete';
+    case 2: return 'status-completed';
+    case 3: return 'status-late';
+    case 4: return 'status-deferred';
+    default: return '';
+  }
 };
 
 const handleLogout = async () => {
@@ -3196,6 +3354,61 @@ onBeforeUnmount(() => {
   line-height: 1.7;
 }
 
+.heatmap-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.heatmap-row {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.heatmap-row-label {
+  width: 90px;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: #8a92a2;
+  text-align: right;
+  padding-right: 6px;
+  line-height: 1;
+}
+
+.heatmap-seg {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 14px;
+  border-radius: 2px;
+  background: #e5e7eb;
+}
+
+.heatmap-seg.is-active {
+  background: #34d399;
+}
+
+.heatmap-legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 12px;
+  color: #8a92a2;
+  margin-top: 6px;
+}
+
+.heatmap-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #e5e7eb;
+}
+
+.heatmap-legend-dot.active {
+  background: #34d399;
+}
+
 /* Strong override and ensure read-only spacing takes effect despite other rules */
 .task-dialog-page.read-only-view {
   gap: 1.2em !important;
@@ -3211,6 +3424,100 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ===== TaskLog 列表样式 ===== */
+.tasklog-section {
+  margin-top: 4px;
+}
+
+.tasklog-count {
+  font-weight: 400;
+  color: #8a92a2;
+  font-size: 12px;
+}
+
+.tasklog-loading {
+  font-size: 12px;
+  color: #8a92a2;
+  padding: 8px 0;
+}
+
+.tasklog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tasklog-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 10px;
+  background: #f9fafc;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.tasklog-item:hover {
+  background: #f0f4ff;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.tasklog-item-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tasklog-item-left .task-type-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.tasklog-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2329;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tasklog-item-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tasklog-result-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-unstarted { background: #f3f4f6; color: #6b7280; }
+.status-incomplete { background: #fee2e2; color: #dc2626; }
+.status-completed { background: #d1fae5; color: #065f46; }
+.status-late { background: #fef3c7; color: #92400e; }
+.status-deferred { background: #ede9fe; color: #6d28d9; }
+
+.tasklog-duration {
+  font-size: 12px;
+  color: #8a92a2;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .w-full {
