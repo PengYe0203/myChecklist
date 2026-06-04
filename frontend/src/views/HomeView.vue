@@ -1073,6 +1073,11 @@ const loadingTaskLogs = ref(false);
 const taskLogDetailVisible = ref(false);
 const selectedTaskLog = ref<TaskLogItem | null>(null);
 
+// 飞行锁：防止快速连点导致重复请求
+const lockingRunStatus = ref(false);
+const lockingComplete = ref(false);
+const lockingActive = ref(false);
+
 const taskTypeOptions: Array<{ label: string; value: number }> = [
   { label: '随手记', value: 0 },
   { label: '周期任务', value: 1 },
@@ -1968,6 +1973,8 @@ const handleLogout = async () => {
 };
 
 const toggleActive = async (task: TreeTask) => {
+  if (lockingActive.value) return;
+  lockingActive.value = true;
   const prevActive = !!task.active;
   const newActive = !prevActive;
   // 乐观更新树节点副本
@@ -1983,6 +1990,8 @@ const toggleActive = async (task: TreeTask) => {
     ElMessage.success('任务状态已更新');
   } catch {
     task.active = prevActive;
+  } finally {
+    lockingActive.value = false;
   }
 };
 
@@ -1997,6 +2006,8 @@ const cascadeActiveLocal = (parentId: number, active: boolean) => {
 };
 
 const toggleComplete = async (task: TreeTask) => {
+  if (lockingComplete.value) return;
+  lockingComplete.value = true;
   const prevCompleted = !!task.isCompleted;
   const newCompleted = !prevCompleted;
   task.isCompleted = newCompleted;
@@ -2019,6 +2030,8 @@ const toggleComplete = async (task: TreeTask) => {
     ElMessage.success('完成状态已更新');
   } catch {
     task.isCompleted = prevCompleted;
+  } finally {
+    lockingComplete.value = false;
   }
 };
 
@@ -2043,6 +2056,8 @@ const uncompleteParentLocal = (parentId: number | null | undefined) => {
 };
 
 const toggleRunStatus = async (task: TreeTask) => {
+  if (lockingRunStatus.value) return;
+  lockingRunStatus.value = true;
   const targetStatus = nextRunStatus(task);
   const prevRunStatus = String(task.runStatus ?? '0');
   const prevLastStart = task.lastStartTime;
@@ -2073,6 +2088,7 @@ const toggleRunStatus = async (task: TreeTask) => {
           { confirmButtonText: '继续开始', cancelButtonText: '取消', type: 'warning' },
         );
       } catch {
+        lockingRunStatus.value = false;
         return;
       }
     }
@@ -2095,7 +2111,8 @@ const toggleRunStatus = async (task: TreeTask) => {
     task.lastStartTime = prevLastStart;
     task.actualDuration = prevActual;
     delete localRunStatus.value[task.taskId];
-    return;
+  } finally {
+    lockingRunStatus.value = false;
   }
 };
 
