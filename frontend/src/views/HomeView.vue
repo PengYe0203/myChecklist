@@ -990,6 +990,85 @@
           </div>
         </template>
       </el-dialog>
+
+      <!-- TaskLog 详情弹窗 -->
+      <el-dialog
+        v-model="taskLogDetailVisible"
+        :title="taskLogDetailTitle"
+        width="520px"
+        :class="['task-dialog', 'view-mode']"
+        destroy-on-close
+        append-to-body
+      >
+        <template v-if="selectedTaskLog">
+          <div class="task-dialog-page read-only-view">
+            <div class="detail-block">
+              <div class="detail-block-label">标题</div>
+              <div class="detail-text">{{ selectedTaskLog.title }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">日期</div>
+              <div>{{ formatDateOnly(selectedTaskLog.date) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">类型</div>
+              <div>{{ taskTypeLabel(selectedTaskLog.type) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">计划用时</div>
+              <div>{{ formatPlannedDuration(selectedTaskLog.plannedDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">实际用时</div>
+              <div>{{ formatDuration(selectedTaskLog.actualDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">当日投入时长</div>
+              <div>{{ formatDuration(selectedTaskLog.dailyActualDuration) }}</div>
+            </div>
+
+            <div class="detail-block">
+              <div class="detail-block-label">执行结果</div>
+              <div>
+                <span :class="['tasklog-result-tag', resultStatusClass(selectedTaskLog.resultStatus)]">
+                  {{ resultStatusLabel(selectedTaskLog.resultStatus) }}
+                </span>
+              </div>
+            </div>
+
+            <div class="detail-block" v-if="taskLogHeatmapRows.length">
+              <div class="detail-block-label">当日执行片段</div>
+              <div class="heatmap-grid">
+                <div
+                  v-for="(row, rowIdx) in taskLogHeatmapRows"
+                  :key="rowIdx"
+                  class="heatmap-row"
+                >
+                  <span class="heatmap-row-label">{{ heatmapRowRange(rowIdx) }}</span>
+                  <div
+                    v-for="(seg, colIdx) in row"
+                    :key="colIdx"
+                    class="heatmap-seg"
+                    :class="{ 'is-active': seg.active }"
+                    :title="seg.label"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template #footer>
+          <div class="task-dialog-footer">
+            <el-button @click="taskLogDetailVisible = false">关闭</el-button>
+          </div>
+        </template>
+      </el-dialog>
     </main>
   </div>
 </template>
@@ -1651,33 +1730,30 @@ const currentTaskTree = computed(() => {
 
 const selectedReview = computed(() => reviewHistory.value.find((item) => item.reviewId === selectedReviewId.value) ?? null);
 
-const timeDistHeatmapRows = computed(() => {
-  const review = selectedReview.value;
-  if (!review?.timeDistribution) return [];
-
+/** 公共热力图构建：解析 segments JSON，返回 6×24 格数据（10 分钟粒度，4:00 起始） */
+const buildHeatmapRows = (jsonStr: string) => {
   let segments: Array<[number, number]>;
   try {
-    segments = JSON.parse(review.timeDistribution);
+    segments = JSON.parse(jsonStr);
   } catch {
     return [];
   }
 
   if (!Array.isArray(segments) || segments.length === 0) return [];
 
-  const totalSeconds = 24 * 3600; // 86400
+  const totalSeconds = 24 * 3600;
   const bucketMinutes = 10;
-  const bucketSize = bucketMinutes * 60; // 600 秒
-  const bucketsPerRow = (60 / bucketMinutes) * 4; // 每行 4 小时 = 24 格
+  const bucketSize = bucketMinutes * 60;
+  const bucketsPerRow = (60 / bucketMinutes) * 4;
   const rowCount = 6;
-  const bucketCount = rowCount * bucketsPerRow; // 144 格
-  const dayStartOffset = 4 * 3600; // 凌晨 4:00 为起点
+  const bucketCount = rowCount * bucketsPerRow;
+  const dayStartOffset = 4 * 3600;
 
   const activeSet = new Set<number>();
   for (const seg of segments) {
     if (!Array.isArray(seg) || seg.length < 2) continue;
     let [start, end] = [Number(seg[0]), Number(seg[1])];
     if (isNaN(start) || isNaN(end)) continue;
-    // 数据以 4:00 为 0，对齐 buckets
     const clampedEnd = Math.min(end, totalSeconds);
     const clampedStart = Math.max(0, start);
     if (clampedStart >= clampedEnd) continue;
@@ -1705,6 +1781,11 @@ const timeDistHeatmapRows = computed(() => {
   }
 
   return rows;
+};
+
+const timeDistHeatmapRows = computed(() => {
+  const review = selectedReview.value;
+  return review?.timeDistribution ? buildHeatmapRows(review.timeDistribution) : [];
 });
 
 const heatmapRowRange = (rowIdx: number) => {
@@ -2014,6 +2095,12 @@ const resultStatusClass = (status?: number) => {
     default: return '';
   }
 };
+
+const taskLogHeatmapRows = computed(() => {
+  return selectedTaskLog.value?.workSegments ? buildHeatmapRows(selectedTaskLog.value.workSegments) : [];
+});
+
+const taskLogDetailTitle = computed(() => selectedTaskLog.value?.title || '任务日志详情');
 
 const handleLogout = async () => {
   authStore.logout();
