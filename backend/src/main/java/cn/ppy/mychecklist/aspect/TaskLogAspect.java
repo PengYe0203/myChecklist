@@ -57,7 +57,7 @@ public class TaskLogAspect {
     private static final long CACHE_TTL_SECONDS = 3600; // 1小时，主要为Review服务，生成完立马使用
 
     // 跨天的时候为所有任务都生成日志，记录任务的执行结果
-    @AfterReturning(pointcut = "execution(* ..TaskService.settleRunningTasks(..)) && args(userId)")
+    @AfterReturning(pointcut = "this(cn.ppy.mychecklist.service.TaskService) && execution(* settleRunningTasks(..)) && args(userId)")
     public void recordLogAfterSettlement(Long userId) {
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime boundary = now.withHour(4).withMinute(0).withSecond(0).withNano(0);
