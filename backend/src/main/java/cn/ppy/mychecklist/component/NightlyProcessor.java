@@ -81,6 +81,7 @@ public class NightlyProcessor {
     private void settleAndReportAllUsers(LocalDate yesterday) {
         log.info("开始执行结算与报告生成...");
         List<User> users = userService.list();
+        log.info("共 {} 个用户需要结算", users.size());
         for (User user : users) {
              try {
                  // 结算正在运行的任务（跨过4点的任务在此切断）
@@ -89,7 +90,13 @@ public class NightlyProcessor {
                  // 生成昨日报告（关注客观数据）
                  reviewService.generateDailyReport(yesterday, user.getUserId());
              } catch (Exception e) {
-                 log.error("用户 [{}] 结算或报告生成失败", user.getUserId(), e);
+                 // 区分连接异常和业务异常，方便排查
+                 String exClassName = e.getClass().getSimpleName();
+                 if (e.getMessage() != null && (e.getMessage().contains("Communications") || e.getMessage().contains("timeout") || e.getMessage().contains("connection"))) {
+                     log.warn("用户 [{}] 结算失败(疑似连接断开): {} - {}", user.getUserId(), exClassName, e.getMessage());
+                 } else {
+                     log.error("用户 [{}] 结算或报告生成失败", user.getUserId(), e);
+                 }
              }
         }
     }
