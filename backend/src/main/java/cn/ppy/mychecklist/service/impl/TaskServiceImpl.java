@@ -606,15 +606,22 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 return; 
             }
 
-            LocalDateTime nextReferencePoint = CronUtils.getNextExecution(cron, referencePoint);
-            if (nextReferencePoint != null) {
-                //获取两个周期的时间差
-                //再应用到startTime和endTime，保证只有日期变化，而小时分钟不变
-                java.time.Duration gap = java.time.Duration.between(referencePoint, nextReferencePoint);
-                task.setStartTime(oldStartTime.plus(gap));
-                if (task.getEndTime() != null) {
-                    task.setEndTime(task.getEndTime().plus(gap));
+            // 循环追赶至当前周期：如果服务器关机错过多个周期，持续前进直到 referencePoint 不再过期。
+            // 例如：锚点周二、每2天一次，周五恢复 → referencePoint: 周二→周四→周六（停止），gap=4天
+            LocalDateTime nextReferencePoint = referencePoint;
+            while (CronUtils.isExpired(cron, nextReferencePoint)) {
+                LocalDateTime candidate = CronUtils.getNextExecution(cron, nextReferencePoint);
+                if (candidate == null || !candidate.isAfter(nextReferencePoint)) {
+                    break; // 防止无限循环
                 }
+                nextReferencePoint = candidate;
+            }
+
+            // 计算累计时间差，应用到 startTime / endTime
+            java.time.Duration totalGap = java.time.Duration.between(referencePoint, nextReferencePoint);
+            task.setStartTime(oldStartTime.plus(totalGap));
+            if (task.getEndTime() != null) {
+                task.setEndTime(task.getEndTime().plus(totalGap));
             }
         }
 
