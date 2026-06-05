@@ -11,7 +11,6 @@ export interface TaskLogItem {
   parentId: number | null;
   actualDuration: number;
   dailyActualDuration: number;
-  actualStartTime: string;
   resultStatus: number;
   workSegments: string;
 }

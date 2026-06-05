@@ -95,7 +95,6 @@ public class TaskLogAspect {
         //执行结果
         taskLog.setActualDuration(task.getActualDuration() != null ? task.getActualDuration() : 0);
         taskLog.setDailyActualDuration(calculateDailyDuration(task.getCurrentDaySegments()));
-        taskLog.setActualStartTime(task.getLastStartTime());
         taskLog.setResultStatus(calculateResultStatus(task, boundary));
         taskLog.setWorkSegments(task.getCurrentDaySegments());
         

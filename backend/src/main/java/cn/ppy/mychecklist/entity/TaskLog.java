@@ -31,7 +31,6 @@ public class TaskLog {
     //task的执行结果
     private Integer actualDuration;
     private Integer dailyActualDuration; // 当日投入时长(秒)
-    private LocalDateTime actualStartTime;
     private LogResultStatus resultStatus; // 0-未开始 1-未完成 2-完成 3-超时完成
     private String workSegments; // 当日执行片段快照
 }
