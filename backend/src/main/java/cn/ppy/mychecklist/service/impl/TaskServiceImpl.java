@@ -156,16 +156,17 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (task == null || task.getType() != TaskType.RECURRING) return;
         if (task.getCronConfig() == null || task.getCronConfig().isBlank()) return;
 
-        LocalDateTime nextCycleStart = CronUtils.getNextExecution(task.getCronConfig(), LocalDateTime.now());
-        if (nextCycleStart == null) return;
+        // 改为当前周期起点（<= now 的最新执行），而非下一次执行
+        LocalDateTime currentCycleStart = CronUtils.getCurrentCycleStart(task.getCronConfig(), LocalDateTime.now());
+        if (currentCycleStart == null) return;
 
-        // 日期设置为下一周期开始，时分保持不变
+        // 日期设置为当前周期开始，时分保持不变
         if (task.getStartTime() != null) {
-            task.setStartTime(nextCycleStart.toLocalDate().atTime(task.getStartTime().toLocalTime()));
+            task.setStartTime(currentCycleStart.toLocalDate().atTime(task.getStartTime().toLocalTime()));
         }
 
         if (task.getEndTime() != null) {
-            task.setEndTime(nextCycleStart.toLocalDate().atTime(task.getEndTime().toLocalTime()));
+            task.setEndTime(currentCycleStart.toLocalDate().atTime(task.getEndTime().toLocalTime()));
         }
 
         if (task.getCronConfig().startsWith("DAY_INTERVAL|")) {
@@ -174,7 +175,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 int second = task.getCronConfig().indexOf('|', first + 1);
                 if (first > 0 && second > first) {
                     int stepDays = Math.max(1, Integer.parseInt(task.getCronConfig().substring(first + 1, second)));
-                    task.setCronConfig("DAY_INTERVAL|" + stepDays + "|" + nextCycleStart);
+                    task.setCronConfig("DAY_INTERVAL|" + stepDays + "|" + currentCycleStart);
                 }
             } catch (Exception ignored) {
                 // 保持原 cronConfig，不让格式问题阻断保存

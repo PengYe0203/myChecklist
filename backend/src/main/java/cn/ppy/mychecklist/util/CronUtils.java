@@ -68,5 +68,36 @@ public class CronUtils {
         LocalDateTime nextTime = getNextExecution(cron, cycleStartRef); //下一个周期的开始时间
         return nextTime != null && !LocalDateTime.now().isBefore(nextTime);
     }
+
+    /**
+     * 获取当前周期的开始时间（&lt;= now 的最新一次执行）。
+     * 例如每天 4:00，now=今天10:00 → 返回今天 4:00。
+     */
+    public static LocalDateTime getCurrentCycleStart(String cron, LocalDateTime now) {
+        if(cron == null || cron.isEmpty() || now == null) return null;
+
+        DayIntervalRule dayIntervalRule = parseDayInterval(cron);
+        if (dayIntervalRule != null) {
+            if (now.isBefore(dayIntervalRule.anchorTime)) return null; // 尚未开始
+
+            long passedDays = Duration.between(dayIntervalRule.anchorTime, now).toDays();
+            long currentOffsetDays = (passedDays / dayIntervalRule.stepDays) * (long) dayIntervalRule.stepDays;
+            return dayIntervalRule.anchorTime.plusDays(currentOffsetDays);
+        }
+
+        try {
+            CronExpression expression = CronExpression.parse(cron);
+            // 标准 cron：从足够早的时间开始，一步步向前找到 &lt;= now 的最新执行
+            LocalDateTime cursor = now.minusYears(1);
+            LocalDateTime result = null;
+            while (cursor != null && !cursor.isAfter(now)) {
+                result = cursor;
+                cursor = expression.next(cursor);
+            }
+            return result;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
 
