@@ -6,18 +6,16 @@ import cn.ppy.mychecklist.entity.User;
 import cn.ppy.mychecklist.util.Result;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 /**
- * 调试控制器 —— 模拟凌晨四点批处理，方便测试 TaskLogAspect 切面
- * 正式上线前请删除或加上 @Profile("dev") 限制环境
+ * 调试控制器：模拟凌晨四点批处理，方便测试 TaskLogAspect 切面
+ * 正式上线前要删除
  */
 @RestController
 @RequestMapping("/api/debug")
-@Profile("dev") // 仅在开发环境启用
 public class DebugController {
 
     @Autowired
