@@ -595,11 +595,14 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         String cron = task.getCronConfig();
 
         if (oldStartTime != null) {
-            // 获取当前周期的开始时间点
-            // 那些四点前的任务算前一天的任务
-            LocalDateTime referencePoint = oldStartTime.withHour(4).withMinute(0).withSecond(0).withNano(0);
-            if (oldStartTime.isBefore(referencePoint)) {
-                referencePoint = referencePoint.minusDays(1);
+            // 基于 cron 表达式计算当前周期的起点
+            LocalDateTime referencePoint = CronUtils.getCurrentCycleStart(cron, oldStartTime);
+            if (referencePoint == null) {
+                // 无法从 cron 解析周期起点，降级为4点边界逻辑
+                referencePoint = oldStartTime.withHour(4).withMinute(0).withSecond(0).withNano(0);
+                if (oldStartTime.isBefore(referencePoint)) {
+                    referencePoint = referencePoint.minusDays(1);
+                }
             }
 
             // 判断是否要刷新

@@ -42,6 +42,7 @@ public class CronUtils {
     public static LocalDateTime getNextExecution(String cron, LocalDateTime relativeTime) {
         if(cron == null || cron.isEmpty() || relativeTime == null) return null;
 
+        // 首先尝试解析自定义的“每N天”规则
         DayIntervalRule dayIntervalRule = parseDayInterval(cron);
         if (dayIntervalRule != null) {
             if (relativeTime.isBefore(dayIntervalRule.anchorTime)) {
@@ -53,6 +54,7 @@ public class CronUtils {
             return dayIntervalRule.anchorTime.plusDays(nextOffsetDays);
         }
 
+        // 标准Cron表达式解析
         try {
             CronExpression expression = CronExpression.parse(cron);
             return expression.next(relativeTime);
