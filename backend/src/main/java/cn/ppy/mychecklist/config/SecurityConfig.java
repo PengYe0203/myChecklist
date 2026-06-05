@@ -24,6 +24,7 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/**").permitAll() // 登录和注册接口直接放行
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll() // 允许访问Swagger UI和API文档
+                .requestMatchers("/api/debug/**").permitAll() // 允许访问调试接口
                 .anyRequest().authenticated() // 其他接口需要认证
             );
 
