@@ -274,44 +274,25 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
     @Override
     @Transactional
     public String editReview(LocalDate date, String content, Long currentUserId) {
-        Review review;
-        
-        //布隆过滤器判空
-        if (!bloomFilter.mightContain(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString())) {
+        Review review = this.lambdaQuery()
+                .eq(Review::getUserId, currentUserId)
+                .eq(Review::getDate, date)
+                .one();
+
+        if (review == null) { //还未生成Review，生成空Review并注册进布隆过滤器
             review = initReview(date, currentUserId);
-            review.setContent(content);
-            boolean saved = this.save(review);
-            if (saved) {
-                bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString());
-            }
-            return saved ? "更新成功" : "失败: Review不存在且创建失败";
+            bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString());
         }
-
-        // 布隆过滤器判定可能存在
-        String cacheKey = detailKey(currentUserId, date);
-        String lockKey = "lock:" + cacheKey;
-        review = redisUtils.getOrRebuild(
-                cacheKey, lockKey, CACHE_TTL_SECONDS,
-                Review.class,
-                () -> { //缓存不存在或过期时执行
-                    Review queryResult = this.lambdaQuery()
-                            .eq(Review::getUserId, currentUserId)
-                            .eq(Review::getDate, date)
-                            .one();
-                    if (queryResult == null) {
-                        queryResult = initReview(date, currentUserId);
-                        this.save(queryResult);
-                    }
-                    queryResult.setContent(content);
-                    return queryResult;
-                }
-        );
-        bloomFilter.add(BloomFilter.NS_REVIEW, currentUserId + ":" + date.toString());
-
-        //前面getOrReubild的set和save是缓存不存在或过期时才执行的
-        //所以这里还需要执行一次更新，确保数据库内容被修改
         review.setContent(content);
-        return this.updateById(review) ? "更新成功" : "失败: Review存在但更新失败";
+        boolean updated = this.saveOrUpdate(review);
+
+        if(!updated) return "更新失败";
+
+        // 删除缓存，等待下次访问时重建，以保证双写一致性
+        redisUtils.delete(detailKey(currentUserId, date));
+        redisUtils.delete("review:list:" + currentUserId);
+
+        return "更新成功";
     }
 
     private Review initReview(LocalDate date, Long userId) {

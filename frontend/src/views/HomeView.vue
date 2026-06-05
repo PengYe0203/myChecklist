@@ -514,8 +514,25 @@
               </div>
 
               <div class="detail-block">
-                <div class="detail-block-label">当日总结</div>
-                <pre class="detail-pre">{{ selectedReview.content || '暂无内容' }}</pre>
+                <div class="detail-block-label">
+                  <span>当日总结</span>
+                  <el-button v-if="!editingReviewContent" size="small" class="detail-edit-btn" @click="startEditReviewContent">编辑</el-button>
+                </div>
+                <template v-if="editingReviewContent">
+                  <el-input
+                    v-model="editingReviewText"
+                    type="textarea"
+                    :rows="5"
+                    maxlength="2000"
+                    show-word-limit
+                    placeholder="记录今天的总结..."
+                  />
+                  <div class="detail-edit-actions">
+                    <el-button size="small" @click="cancelEditReviewContent">取消</el-button>
+                    <el-button size="small" type="warning" :loading="savingReviewContent" @click="saveReviewContent">保存</el-button>
+                  </div>
+                </template>
+                <pre v-else class="detail-pre">{{ selectedReview.content || '暂无内容' }}</pre>
               </div>
 
               <div class="detail-footer">
@@ -1072,6 +1089,11 @@ const taskLogs = ref<TaskLogItem[]>([]);
 const loadingTaskLogs = ref(false);
 const taskLogDetailVisible = ref(false);
 const selectedTaskLog = ref<TaskLogItem | null>(null);
+
+// 回顾详情中编辑总结
+const editingReviewContent = ref(false);
+const editingReviewText = ref('');
+const savingReviewContent = ref(false);
 
 // 飞行锁：防止快速连点导致重复请求
 const lockingRunStatus = ref(false);
@@ -1937,6 +1959,32 @@ const loadTaskLogsForReview = async (review: ReviewItem) => {
     taskLogs.value = [];
   } finally {
     loadingTaskLogs.value = false;
+  }
+};
+
+const startEditReviewContent = () => {
+  editingReviewText.value = selectedReview.value?.content || '';
+  editingReviewContent.value = true;
+};
+
+const cancelEditReviewContent = () => {
+  editingReviewContent.value = false;
+};
+
+const saveReviewContent = async () => {
+  if (!selectedReview.value) return;
+  savingReviewContent.value = true;
+  try {
+    const dateKey = formatDateKey(selectedReview.value.date);
+    await editReviewApi(dateKey, editingReviewText.value);
+    // 同步更新本地 selectedReview 和 reviewHistory 中的 content
+    const target = reviewHistory.value.find((r) => r.reviewId === selectedReviewId.value);
+    if (target) target.content = editingReviewText.value;
+    if (selectedReview.value) selectedReview.value.content = editingReviewText.value;
+    editingReviewContent.value = false;
+    ElMessage.success('总结已保存');
+  } finally {
+    savingReviewContent.value = false;
   }
 };
 
@@ -3317,6 +3365,9 @@ onBeforeUnmount(() => {
   font-weight: 700;
   letter-spacing: 0;
   text-transform: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .read-only-view {
@@ -3360,6 +3411,22 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.7;
+}
+
+.detail-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.detail-edit-btn {
+  padding: 2px 10px;
+  font-size: 12px;
+  background-color: #f3f4f6;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
 }
 
 /* Minimal text container that preserves newlines only (no background/padding) */
