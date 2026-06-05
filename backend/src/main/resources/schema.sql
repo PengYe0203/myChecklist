@@ -43,7 +43,6 @@ create table task_log (
   planned_duration INT,
   parent_id BIGINT,
   actual_duration INT DEFAULT 0,
-  actual_start_time DATETIME,
   result_status INT DEFAULT 0 COMMENT '0-未开始 1-未完成 2-完成 3-超时完成',
   work_segments TEXT COMMENT '历史执行片段JSON: [[start_sec, end_sec], ...]',
   INDEX idx_user_id (user_id),
