@@ -41,10 +41,37 @@
         </div>
       </header>
       <div v-if="activeSection === 'today'" class="section-toolbar section-toolbar-left">
+        <el-button v-if="timelineMode" type="info" plain @click="timelineMode = false">列表视图</el-button>
+        <el-button v-else type="info" plain @click="timelineMode = true">时间轴视图</el-button>
         <el-button type="warning" @click="openCreateTaskDialog()">新建任务</el-button>
         <el-button type="warning" plain :loading="loadingTasks" @click="loadTasks">刷新任务</el-button>
       </div>
-      <section v-if="activeSection === 'today'" class="panel-card">
+
+      <!-- 时间轴视图 -->
+      <section v-if="activeSection === 'today' && timelineMode" class="panel-card timeline-panel">
+        <div class="timeline-header">
+          <div class="timeline-now-time">{{ timelineNowTime }}</div>
+        </div>
+
+        <el-empty v-if="!timelineGroups.length" description="当前没有今日任务" />
+
+        <div v-else class="timeline-body">
+          <div v-for="group in timelineGroups" :key="group.key" class="timeline-group">
+            <div class="timeline-group-head" :class="'timeline-head-' + group.key">
+              {{ group.label }}
+              <span v-if="group.warnings.length" class="timeline-warn-badge" :title="group.warnings.join('；')">⚠{{ group.warnings.length }}</span>
+            </div>
+            <div v-for="item in group.items" :key="item.task.taskId" class="timeline-item" :class="{ 'timeline-item-warn': item.conflict }" @click.stop="openViewTaskDialog(item.task)">
+              <span class="timeline-item-time">{{ item.timeLabel }}</span>
+              <span class="timeline-item-title">{{ item.task.title }}</span>
+            </div>
+            <div v-if="!group.items.length" class="timeline-empty">暂无</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 列表视图 -->
+      <section v-else-if="activeSection === 'today'" class="panel-card">
         <el-empty v-if="!currentTodayTree.length && !loadingTasks" description="当前没有今日任务" />
 
         <el-tree
@@ -1291,6 +1318,150 @@ const clockLabel = (task: TaskItem) => {
   const target = Number(task.targetDuration ?? 0) > 0 ? formatDurationHMS(task.targetDuration) : '--:--:--';
   return `${actual} / ${target}`;
 };
+
+// ========== 时间轴视图 ==========
+const timelineMode = ref(false);
+
+const timelineNowLabel = computed(() => {
+  const d = new Date();
+  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+});
+
+const timelineNowTime = computed(() => {
+  const d = new Date();
+  const pad = (n: number) => `${n}`.padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+});
+
+// 定时刷新时间
+let timelineTimer: number | null = null;
+watch(timelineMode, (val) => {
+  if (val) {
+    timelineTimer = window.setInterval(() => { heartbeatNow.value = Date.now(); }, 5000);
+  } else if (timelineTimer !== null) {
+    window.clearInterval(timelineTimer);
+    timelineTimer = null;
+  }
+});
+onBeforeUnmount(() => {
+  if (timelineTimer !== null) window.clearInterval(timelineTimer);
+});
+
+/** 解析时间字符串（HH:mm:ss 或 HH:mm），返回分钟数（以4:00为零点归一化） */
+const parseTimeToMinutes = (value?: string): number | null => {
+  if (!value) return null;
+  const parts = value.split(':');
+  if (parts.length < 2) return null;
+  const raw = Number(parts[0]) * 60 + Number(parts[1]);
+  // 归一化到 4:00 为 0：04:00 → 0，03:59 → 1439
+  return (raw - 240 + 1440) % 1440;
+};
+
+const timelineGroups = computed(() => {
+  const now = new Date();
+  const rawNow = now.getHours() * 60 + now.getMinutes();
+  // 以 4:00 为零点归一化当前时间
+  const nowMinutes = (rawNow - 240 + 1440) % 1440;
+
+  // 收集今日未完成且激活的任务（扁平化，不含场景）
+  const flatTasks: Array<{ task: TreeTask; startMin: number | null; endMin: number | null }> = [];
+  const collectFlat = (nodes: TreeTask[]) => {
+    for (const node of nodes) {
+      if (!node.isCompleted && node.active && !isScene(node)) {
+        const startMin = parseTimeToMinutes(getTimePart(node.startTime));
+        const endMin = parseTimeToMinutes(getTimePart(node.endTime));
+        flatTasks.push({ task: node, startMin, endMin });
+      }
+      if (node.children?.length) collectFlat(node.children);
+    }
+  };
+  collectFlat(currentTodayTree.value);
+
+  // 冲突检测
+  const typed: Array<{
+    key: string;
+    task: TreeTask;
+    startMin: number | null;
+    endMin: number | null;
+    conflict: boolean;
+  }> = flatTasks.map((ft) => {
+    let conflict = false;
+    if (ft.startMin !== null && ft.endMin !== null && ft.task.parentId != null) {
+      const parent = allTasks.value.find((t) => t.taskId === ft.task.parentId);
+      if (parent && !isScene(parent) && parent.active && !parent.isCompleted) {
+        const pStart = parseTimeToMinutes(getTimePart(parent.startTime));
+        const pEnd = parseTimeToMinutes(getTimePart(parent.endTime));
+        if (pStart !== null && pEnd !== null) {
+          const overlap = ft.startMin < pEnd && ft.endMin > pStart;
+          if (overlap && !ft.task.inheritParentTime) {
+            conflict = true;
+          }
+        }
+      }
+    }
+    return { key: '', task: ft.task, startMin: ft.startMin, endMin: ft.endMin, conflict };
+  });
+
+  // 分四组
+  const overdue: typeof typed = [];
+  const current: typeof typed = [];
+  const later: typeof typed = [];
+  const allDay: typeof typed = [];
+
+  for (const item of typed) {
+    const hasStart = item.startMin !== null;
+    const hasEnd = item.endMin !== null;
+    if (!hasStart && !hasEnd) {
+      allDay.push(item);                                    // 2. 无起止 → 全天
+    } else if (hasStart && hasEnd) {
+      if (nowMinutes < item.startMin!) later.push(item);    // 1. now 早于 start → 稍后
+      else if (nowMinutes > item.endMin!) overdue.push(item); //   now 晚于 end → 过期
+      else current.push(item);                              //   otherwise → 现在
+    } else if (hasStart) {
+      if (nowMinutes < item.startMin!) later.push(item);    // 3. now 早于 start → 稍后
+      else current.push(item);                              //   otherwise → 现在
+    } else {
+      if (nowMinutes < item.endMin!) current.push(item);    // 4. now 早于 end → 现在
+      else overdue.push(item);                              //   otherwise → 过期
+    }
+  }
+
+  const buildGroup = (key: string, label: string, items: typeof typed) => {
+    items.sort((a, b) => {
+      const sa = a.startMin ?? a.endMin ?? 9999;
+      const sb = b.startMin ?? b.endMin ?? 9999;
+      return sa - sb;
+    });
+    const warnings = items.filter((i) => i.conflict).map((i) => `「${i.task.title}」与父任务时间冲突且未启用时长同步`);
+    return {
+      key,
+      label,
+      warnings: Array.from(new Set(warnings)),
+      items: items.map((i) => {
+        let timeLabel: string;
+        if (i.startMin === null && i.endMin === null) {
+          timeLabel = '[全天]';
+        } else {
+          // 反归一化：0 → 4:00
+          const fmt = (m: number | null) => {
+            if (m === null) return '';
+            const real = (m + 240) % 1440;
+            return `${String(Math.floor(real / 60)).padStart(2, '0')}:${String(real % 60).padStart(2, '0')}`;
+          };
+          timeLabel = `[${fmt(i.startMin)} - ${fmt(i.endMin)}]`;
+        }
+        return { task: i.task, timeLabel, conflict: i.conflict };
+      }),
+    };
+  };
+
+  return [
+    buildGroup('overdue', '过期', overdue),
+    buildGroup('current', '现在', current),
+    buildGroup('later', '稍后', later),
+    buildGroup('allday', '全天', allDay),
+  ];
+});
 
 const startHeartbeatTimer = () => {
   if (heartbeatTimer !== null) return;
@@ -3336,6 +3507,127 @@ onBeforeUnmount(() => {
   padding-top: 4px; /* slightly smaller */
   border-top: none;
   min-width: 0;
+}
+
+/* ===== 时间轴视图 ===== */
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.timeline-now-label {
+  font-size: 14px;
+  color: #8a92a2;
+}
+
+.timeline-now-time {
+  font-size: 32px;
+  font-weight: 800;
+  color: #1f2329;
+  letter-spacing: -0.02em;
+}
+
+.timeline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.timeline-group {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.timeline-group-head {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-head-overdue {
+  background: rgba(251, 118, 118, 0.12);
+  color: #dc2626;
+}
+
+.timeline-head-current {
+  background: rgba(52, 211, 153, 0.12);
+  color: #065f46;
+}
+
+.timeline-head-later {
+  background: rgba(147, 197, 253, 0.14);
+  color: #2563eb;
+}
+
+.timeline-head-allday {
+  background: rgba(247, 213, 74, 0.16);
+  color: #8f6b00;
+}
+
+.timeline-warn-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: help;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  margin-top: 4px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.timeline-item-warn {
+  background: rgba(251, 118, 118, 0.08);
+  border-color: rgba(251, 118, 118, 0.25);
+}
+
+.timeline-item-time {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  min-width: 90px;
+}
+
+.timeline-item-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2329;
+}
+
+.timeline-empty {
+  padding: 6px 12px;
+  color: #c4c9d1;
+  font-size: 12px;
 }
 
 .review-layout {
