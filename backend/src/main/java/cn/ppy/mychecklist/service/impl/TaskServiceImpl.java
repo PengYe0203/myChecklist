@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,7 +58,13 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
     }
 
     private Long getCurrentUserId(){
-        return (Long) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if(authentication == null || authentication.getPrincipal() == null) {
+            // 系统调用方法(如各种@Scheduled方法)没有Security上下文
+            // 返回一个默认用户ID，避免空指针异常
+            return 0L; 
+        }
+        return (Long) authentication.getPrincipal();
     }
 
     @Override
