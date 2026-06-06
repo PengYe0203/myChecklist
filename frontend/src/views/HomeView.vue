@@ -102,12 +102,23 @@
                   <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
                   <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                   <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
-                    <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
-                      <el-icon>
-                        <VideoPause v-if="isHeartbeatTask(data)" />
-                        <VideoPlay v-else />
-                      </el-icon>
-                    </button>
+                    <el-tooltip 
+                      :disabled="data.active && !data.isCompleted"
+                      content="任务未激活或已完成，无法操作"
+                      placement="top"
+                    >
+                      <button 
+                        type="button" 
+                        class="task-run-toggle" 
+                        :disabled="!data.active || data.isCompleted" 
+                        @click.stop="toggleRunStatus(data)"
+                      >
+                        <el-icon>
+                          <VideoPause v-if="isHeartbeatTask(data)" />
+                          <VideoPlay v-else />
+                        </el-icon>
+                      </button>
+                    </el-tooltip>
                     <div class="task-node-clock-bar">
                       <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="6" :color="'#93c5fd'" />
                       <span class="clock-progress-text">{{ clockLabel(data) }}</span>
@@ -193,12 +204,23 @@
                       <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
                       <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                       <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
-                        <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
+                        <el-tooltip 
+                          :disabled="data.active && !data.isCompleted"
+                          content="任务未激活或已完成，无法操作"
+                          placement="top"
+                        >
+                          <button 
+                            type="button" 
+                            class="task-run-toggle" 
+                            :disabled="!data.active || data.isCompleted" 
+                            @click.stop="toggleRunStatus(data)"
+                          >
                           <el-icon>
                             <VideoPause v-if="isHeartbeatTask(data)" />
                             <VideoPlay v-else />
                           </el-icon>
                         </button>
+                      </el-tooltip>
                         <div class="task-node-clock-bar">
                           <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
                           <span class="clock-progress-text">{{ clockLabel(data) }}</span>
@@ -259,12 +281,23 @@
                     <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
                     <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
-                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
-                        <el-icon>
-                          <VideoPause v-if="isHeartbeatTask(data)" />
-                          <VideoPlay v-else />
-                        </el-icon>
-                      </button>
+                      <el-tooltip 
+                        :disabled="data.active && !data.isCompleted"
+                        content="任务未激活或已完成，无法操作"
+                        placement="top"
+                      >
+                        <button 
+                          type="button" 
+                          class="task-run-toggle" 
+                          :disabled="!data.active || data.isCompleted" 
+                          @click.stop="toggleRunStatus(data)"
+                        >
+                          <el-icon>
+                            <VideoPause v-if="isHeartbeatTask(data)" />
+                            <VideoPlay v-else />
+                          </el-icon>
+                        </button>
+                      </el-tooltip>
                       <div class="task-node-clock-bar">
                         <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
                         <span class="clock-progress-text">{{ clockLabel(data) }}</span>
@@ -355,12 +388,23 @@
                     <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
                     <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
-                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
-                        <el-icon>
-                          <VideoPause v-if="isHeartbeatTask(data)" />
-                          <VideoPlay v-else />
-                        </el-icon>
-                      </button>
+                      <el-tooltip 
+                        :disabled="data.active && !data.isCompleted"
+                        content="任务未激活或已完成，无法操作"
+                        placement="top"
+                      >
+                        <button 
+                          type="button" 
+                          class="task-run-toggle" 
+                          :disabled="!data.active || data.isCompleted" 
+                          @click.stop="toggleRunStatus(data)"
+                        >
+                          <el-icon>
+                            <VideoPause v-if="isHeartbeatTask(data)" />
+                            <VideoPlay v-else />
+                          </el-icon>
+                        </button>
+                      </el-tooltip>
                       <div class="task-node-clock-bar">
                         <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
                         <span class="clock-progress-text">{{ clockLabel(data) }}</span>
@@ -424,12 +468,23 @@
                     <span v-if="data.children?.length" class="task-node-children-badge">+{{ data.children.length }}</span>
                     <span v-if="formatTaskMetaSummary(data)" class="task-node-desc">{{ formatTaskMetaSummary(data) }}</span>
                     <div class="task-node-clock" :class="{ 'is-running': isHeartbeatTask(data) }">
-                      <button type="button" class="task-run-toggle" @click.stop="toggleRunStatus(data)">
-                        <el-icon>
-                          <VideoPause v-if="isHeartbeatTask(data)" />
-                          <VideoPlay v-else />
-                        </el-icon>
-                      </button>
+                      <el-tooltip 
+                        :disabled="data.active && !data.isCompleted"
+                        content="任务未激活或已完成，无法操作"
+                        placement="top"
+                      >
+                        <button 
+                          type="button" 
+                          class="task-run-toggle" 
+                          :disabled="!data.active || data.isCompleted" 
+                          @click.stop="toggleRunStatus(data)"
+                        >
+                          <el-icon>
+                            <VideoPause v-if="isHeartbeatTask(data)" />
+                            <VideoPlay v-else />
+                          </el-icon>
+                        </button>
+                      </el-tooltip>
                       <div class="task-node-clock-bar">
                         <el-progress :percentage="progressPercent(data)" :show-text="false" :stroke-width="4" :color="'#93c5fd'" />
                         <span class="clock-progress-text">{{ clockLabel(data) }}</span>
@@ -1375,6 +1430,11 @@ const getRunStatusHasLastStart = (task: TaskItem) => {
 };
 
 const isHeartbeatTask = (task: TaskItem) => getRunStatusKey(task) === '1' && getRunStatusHasLastStart(task) && !task.isCompleted;
+
+const isAutoAndDurationMet = (task: TaskItem) =>
+  String(task.settlementType) === '1'
+  && Number(task.targetDuration ?? 0) > 0
+  && Number(task.actualDuration ?? 0) >= Number(task.targetDuration ?? 0);
 
 const nextRunStatus = (task: TaskItem): 'IN_PROGRESS' | 'PAUSED' => (isHeartbeatTask(task) ? 'PAUSED' : 'IN_PROGRESS');
 
@@ -2516,6 +2576,23 @@ const toggleComplete = async (task: TreeTask) => {
   lockingComplete.value = true;
   const prevCompleted = !!task.isCompleted;
   const newCompleted = !prevCompleted;
+
+  // 撤回自动结算任务时，若时长已达标则提醒用户
+  if (!newCompleted && isAutoAndDurationMet(task)) {
+    const actualLabel = formatDuration(Math.max(0, Number(task.actualDuration ?? 0)));
+    const targetLabel = formatDuration(Math.max(1, Number(task.targetDuration ?? 0)));
+    try {
+      await ElMessageBox.confirm(
+        `任务「${task.title}」的结算模式为自动结算，且累计时长已达标，撤回后将在短时间内重新自动完成。如必要，请将结算模式切换为手动结算。`,
+        '提示',
+        { confirmButtonText: '仍然撤回', cancelButtonText: '取消', type: 'warning', dangerouslyUseHTMLString: true },
+      );
+    } catch {
+      lockingComplete.value = false;
+      return;
+    }
+  }
+
   task.isCompleted = newCompleted;
   try {
     await toggleCompleteApi(task.taskId, newCompleted);
