@@ -462,10 +462,14 @@
           <div class="panel-card review-history-card">
             <div class="panel-head">
               <div>
-                <h3>历史回顾</h3>
+                <h3>全部回顾</h3>
                 <p style="font-size: 0.8rem">点击任意条目查看详情</p>
               </div>
-              <el-button type="warning" @click="loadReviews">刷新</el-button>
+              <div class="panel-head-actions">
+                <el-button type="primary" plain @click="openWeeklyReport">生成周报</el-button>
+                <el-button type="primary" plain @click="openMonthlyReport">生成月报</el-button>
+                <el-button type="warning" @click="loadReviews">刷新</el-button>
+              </div>
             </div>
 
             <el-empty v-if="!reviewHistory.length" description="还没有历史回顾" />
@@ -1096,6 +1100,85 @@
           </div>
         </template>
       </el-dialog>
+
+      <!-- 周报/月报弹窗 -->
+      <el-dialog
+        v-model="reportDialogVisible"
+        :title="reportDialogTitle"
+        width="700px"
+        :class="['task-dialog', 'view-mode']"
+        destroy-on-close
+        append-to-body
+      >
+        <div v-if="reportLoading" style="text-align:center;padding:40px;">加载中...</div>
+        <template v-else-if="reportData">
+          <div class="task-dialog-page read-only-view">
+            <div class="detail-grid">
+              <div class="detail-item">
+                <span>完成任务 / 总任务</span>
+                <strong>{{ reportData.doneCount ?? 0 }} / {{ reportData.totalCount ?? 0 }}</strong>
+              </div>
+              <div class="detail-item">
+                <span>实际时长 / 计划时长</span>
+                <strong>{{ formatDuration(reportData.actualDurationSum) }} / {{ formatDuration(reportData.plannedDurationSum) }}</strong>
+              </div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item">
+                <span>总投入时间</span>
+                <strong>{{ formatDuration(reportData.grossEffort) }}</strong>
+              </div>
+              <div class="detail-item">
+                <span>净专注时间</span>
+                <strong>{{ formatDuration(reportData.netFocusTime) }}</strong>
+              </div>
+            </div>
+
+            <div class="detail-block" v-if="reportCalendarRows.length">
+              <div class="calendar-grid">
+                <div class="calendar-row calendar-weekday-row">
+                  <span class="calendar-row-label"></span>
+                  <div v-for="wd in weekdayHeaders" :key="wd" class="calendar-weekday-cell">{{ wd }}</div>
+                </div>
+                <div
+                  v-for="(row, rowIdx) in reportCalendarRows"
+                  :key="rowIdx"
+                  class="calendar-row"
+                >
+                  <span class="calendar-row-label">{{ row.monthLabel }}</span>
+                  <div
+                    v-for="(cell, colIdx) in row.cells"
+                    :key="colIdx"
+                    class="calendar-cell"
+                    :class="cell.cssClass"
+                    :title="cell.label"
+                  >
+                    <span class="calendar-cell-day">{{ cell.day }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="calendar-legend">
+                <span class="calendar-legend-item">
+                  <span class="calendar-legend-dot legend-done"></span> 全部完成
+                </span>
+                <span class="calendar-legend-item">
+                  <span class="calendar-legend-dot legend-partial"></span> 部分完成
+                </span>
+                <span class="calendar-legend-item">
+                  <span class="calendar-legend-dot legend-none"></span> 无任务
+                </span>
+              </div>
+            </div>
+          </div>
+        </template>
+        <el-empty v-else description="暂无数据" />
+
+        <template #footer>
+          <div class="task-dialog-footer">
+            <el-button @click="reportDialogVisible = false">关闭</el-button>
+          </div>
+        </template>
+      </el-dialog>
     </main>
   </div>
 </template>
@@ -1118,7 +1201,7 @@ import {
   toggleRunStatusApi,
   type TaskItem,
 } from '@/api/task';
-import { editReviewApi, getAllReviewsApi, type ReviewItem } from '@/api/review';
+import { editReviewApi, getAllReviewsApi, getReviewAggregateApi, type ReviewAggregateVo, type ReviewItem } from '@/api/review';
 import { getTaskLogsByDateApi, type TaskLogItem } from '@/api/taskLog';
 
 type SectionKey = 'today' | 'todo' | 'all' | 'review';
@@ -1195,6 +1278,12 @@ const taskLogs = ref<TaskLogItem[]>([]);
 const loadingTaskLogs = ref(false);
 const taskLogDetailVisible = ref(false);
 const selectedTaskLog = ref<TaskLogItem | null>(null);
+
+// 周报/月报
+const reportDialogVisible = ref(false);
+const reportDialogTitle = ref('');
+const reportLoading = ref(false);
+const reportData = ref<ReviewAggregateVo | null>(null);
 
 // 回顾详情中编辑总结
 const editingReviewContent = ref(false);
@@ -2177,6 +2266,117 @@ const loadReviews = async () => {
 const syncReviewDraft = () => {
   window.localStorage.setItem(draftStorageKey.value, reviewDraft.value);
 };
+
+// ========== 周报/月报 ==========
+const getDateRangeExcludingToday = (days: number) => {
+  const today = getBusinessDayDate(new Date());
+  const endDate = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const startDate = new Date(endDate.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+  const fmt = (d: Date) => {
+    const y = d.getFullYear();
+    const m = `${d.getMonth() + 1}`.padStart(2, '0');
+    const day = `${d.getDate()}`.padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  return { startDate: fmt(startDate), endDate: fmt(endDate) };
+};
+
+const openWeeklyReport = () => openReport('周报', 7);
+const openMonthlyReport = () => openReport('月报', 30);
+
+const openReport = async (title: string, days: number) => {
+  reportDialogVisible.value = true;
+  reportDialogTitle.value = title;
+  reportLoading.value = true;
+  reportData.value = null;
+  try {
+    const { startDate, endDate } = getDateRangeExcludingToday(days);
+    const response = await getReviewAggregateApi(startDate, endDate);
+    reportData.value = (response as any).data ?? null;
+  } catch {
+    reportData.value = null;
+  } finally {
+    reportLoading.value = false;
+  }
+};
+
+/** 构建周报/月报的热力图日历：每行7天，绿色=全部完成，淡黄=部分完成，灰=无数据 */
+const reportCalendarRows = computed(() => {
+  if (!reportData.value) return [];
+  const { startDate, endDate } = getDateRangeExcludingToday(reportDialogTitle.value === '月报' ? 30 : 7);
+  const days = reportDialogTitle.value === '月报' ? 30 : 7;
+
+  const activeSet = new Set<string>();
+  const streakSet = new Set<string>();
+
+  if (reportData.value.activeDistribution) {
+    for (const d of reportData.value.activeDistribution) {
+      const key = typeof d === 'string' ? d : String(d);
+      activeSet.add(key);
+    }
+  }
+  if (reportData.value.streakDistribution) {
+    for (const d of reportData.value.streakDistribution) {
+      const key = typeof d === 'string' ? d : String(d);
+      streakSet.add(key);
+    }
+  }
+
+  // 计算起始日期是周几（0=周日 → 转为 0=周一...6=周日）
+  const firstDate = new Date(startDate);
+  const startDayOfWeek = firstDate.getDay() === 0 ? 6 : firstDate.getDay() - 1;
+
+  interface CalendarCell { day: string; cssClass: string; label: string; placeholder?: boolean }
+  const cells: CalendarCell[] = [];
+
+  // 第一行补空白占位格
+  for (let i = 0; i < startDayOfWeek; i++) {
+    cells.push({ day: '', cssClass: 'cal-placeholder', label: '', placeholder: true });
+  }
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(startDate);
+    d.setDate(d.getDate() + i);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const dayLabel = `${d.getMonth() + 1}.${d.getDate()}`;
+    if (streakSet.has(key)) {
+      cells.push({ day: dayLabel, cssClass: 'cal-done', label: `${key} 全部完成` });
+    } else if (activeSet.has(key)) {
+      cells.push({ day: dayLabel, cssClass: 'cal-partial', label: `${key} 部分完成` });
+    } else {
+      cells.push({ day: dayLabel, cssClass: 'cal-none', label: `${key} 无任务` });
+    }
+  }
+
+  // 最后一行补空白占位格到满7格
+  const remainder = cells.length % 7;
+  if (remainder !== 0) {
+    for (let i = remainder; i < 7; i++) {
+      cells.push({ day: '', cssClass: 'cal-placeholder', label: '', placeholder: true });
+    }
+  }
+
+  const rows: Array<{ monthLabel: string; cells: CalendarCell[] }> = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const slice = cells.slice(i, i + 7);
+    // 找该行第一个真实日期
+    const firstReal = slice.find(c => !c.placeholder);
+    const lastReal = slice.reduceRight<CalendarCell | undefined>((_, c) => c.placeholder ? undefined : c, undefined as any)
+      ?? slice.filter(c => !c.placeholder).pop();
+    let monthLabel = '';
+    if (firstReal && lastReal) {
+      // 从 day 字符串 "6.5" 提取月份
+      const fm = Number(firstReal.day.split('.')[0]);
+      const lm = Number(lastReal.day.split('.')[0]);
+      monthLabel = fm === lm ? `${fm}月` : `${fm}/${lm}月`;
+    }
+    rows.push({ monthLabel, cells: slice });
+  }
+  return rows;
+});
+
+// 星期标题行（周一开始）
+const weekdayHeaders = ['一', '二', '三', '四', '五', '六', '日'];
 
 const saveDraft = () => {
   syncReviewDraft();
@@ -3870,6 +4070,116 @@ onBeforeUnmount(() => {
 
 .heatmap-legend-dot.active {
   background: #34d399;
+}
+
+/* ===== 周报/月报日历热力图 ===== */
+.calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.calendar-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.calendar-row-label {
+  width: 36px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #8a92a2;
+  text-align: right;
+  padding-right: 4px;
+  line-height: 1;
+}
+
+/* 星期标题行 */
+.calendar-weekday-row {
+  margin-bottom: 2px;
+}
+
+.calendar-weekday-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  padding: 2px 0;
+}
+
+.calendar-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 34px;
+  max-width: none;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1f2329;
+  cursor: default;
+}
+
+.calendar-cell.cal-placeholder {
+  visibility: hidden;
+}
+
+.calendar-cell.cal-done {
+  background: #34d399;
+  color: #065f46;
+}
+
+.calendar-cell.cal-partial {
+  background: #fde68a;
+  color: #92400e;
+}
+
+.calendar-cell.cal-none {
+  background: #e5e7eb;
+  color: #9ca3af;
+}
+
+.calendar-cell-day {
+  white-space: nowrap;
+}
+
+.calendar-legend {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 12px;
+  color: #8a92a2;
+  margin-top: 8px;
+}
+
+.calendar-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.calendar-legend-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.calendar-legend-dot.legend-done {
+  background: #34d399;
+}
+
+.calendar-legend-dot.legend-partial {
+  background: #fde68a;
+}
+
+.calendar-legend-dot.legend-none {
+  background: #e5e7eb;
 }
 
 /* Strong override and ensure read-only spacing takes effect despite other rules */

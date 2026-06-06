@@ -66,6 +66,14 @@ public class RedisUtils {
         return Boolean.TRUE.equals(res);
     }
 
+    /** 删除匹配 pattern 的所有 key */
+    public void deletePattern(String pattern) {
+        var keys = stringRedisTemplate.keys(pattern);
+        if (keys != null && !keys.isEmpty()) {
+            stringRedisTemplate.delete(keys);
+        }
+    }
+
     public boolean exists(String key) {
         Boolean res = stringRedisTemplate.hasKey(key);
         return Boolean.TRUE.equals(res);

@@ -52,10 +52,21 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
     private BloomFilter bloomFilter;
 
     private static final String CACHE_KEY_PREFIX = "review:detail:";
+    private static final String WEEKLY_CACHE_KEY_PREFIX = "review:weekly:"; //周报前缀
+    private static final String MONTHLY_CACHE_KEY_PREFIX = "review:monthly:"; //月报前缀
     private static final long CACHE_TTL_SECONDS = 86400; // 1天，供用户第二天查看
 
     private String detailKey(Long userId, LocalDate date) {
         return CACHE_KEY_PREFIX + userId + ":" + date.toString();
+    }
+
+    private String aggregateKey(Long userId, LocalDate startDate, LocalDate endDate) {
+        //目前没有自定义日期的范围查询，只有7天或30天
+        if(startDate.plusDays(6).equals(endDate)) {
+            return WEEKLY_CACHE_KEY_PREFIX + userId + ":" + startDate.toString() + ":" + endDate.toString();
+        } else {
+            return MONTHLY_CACHE_KEY_PREFIX + userId + ":" + startDate.toString() + ":" + endDate.toString();
+        }
     }
 
     // 每日定时生成前一天的Review，统计当天的任务完成情况和时间分布等数据
@@ -171,6 +182,10 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
 
         // 清空该用户所有任务的片段记录
         clearAllTaskSegments(userId);
+
+        // 新一天的数据入库后，清除该用户的周报/月报缓存
+        redisUtils.deletePattern("review:weekly:" + userId + ":*");
+        redisUtils.deletePattern("review:monthly:" + userId + ":*");
     }
 
     // 对于长周期任务和ddl任务，当天的目标时长为剩余时长
@@ -304,6 +319,16 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
 
     @Override
     public ReviewAggregateVo getAggregateReview(LocalDate startDate, LocalDate endDate, Long currentUserId) {
+        String cacheKey = aggregateKey(currentUserId, startDate, endDate);
+        String lockKey = "lock:" + cacheKey;
+
+        return redisUtils.getOrRebuild(
+                cacheKey, lockKey, CACHE_TTL_SECONDS,
+                ReviewAggregateVo.class,
+                () -> computeAggregateReview(startDate, endDate, currentUserId));
+    }
+
+    private ReviewAggregateVo computeAggregateReview(LocalDate startDate, LocalDate endDate, Long currentUserId) {
         List<Review> reviews = this.lambdaQuery()
                 .eq(Review::getUserId, currentUserId)
                 .between(Review::getDate, startDate, endDate)
