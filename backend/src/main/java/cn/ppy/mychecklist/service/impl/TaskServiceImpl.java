@@ -442,16 +442,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             updateParentSubDuration(task.getParentId(), (int)seconds, context);
         }
 
-        // 滑动时间起点
-        task.setLastStartTime(now);
-        context.markModified(task);
-        this.updateBatchById(context.getModifiedTasks());
-
         // 自动结项逻辑
         // 如果是自动结算任务，且目标时长已达成，则触发自动完成
         if (parentAndTaskReadyForAutoComplete(task)) {
             this.toggleComplete(taskId, true);
         }
+
+        // 滑动时间起点
+        task.setLastStartTime(now);
+        context.markModified(task);
+        this.updateBatchById(context.getModifiedTasks());
     }
 
     private boolean parentAndTaskReadyForAutoComplete(Task task) {
@@ -559,8 +559,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                     updateParentSubDuration(task.getParentId(), seconds, context);
                 }
                 
-                task.setRunStatus(RunStatusType.NOT_STARTED);
             }
+            task.setRunStatus(RunStatusType.NOT_STARTED);
+            task.setLastStartTime(null); //完成状态不应该有未结算的计时上下文
         }
 
         task.setIsCompleted(complete);
