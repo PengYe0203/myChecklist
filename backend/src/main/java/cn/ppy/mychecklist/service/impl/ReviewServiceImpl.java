@@ -16,9 +16,6 @@ import lombok.extern.slf4j.Slf4j;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -41,9 +38,6 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
 
     @Autowired
     private TaskLogMapper taskLogMapper;
-
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
 
     @Autowired
     private RedisUtils redisUtils;
@@ -169,23 +163,16 @@ public class ReviewServiceImpl extends ServiceImpl<ReviewMapper, Review> impleme
         //存进DB
         this.saveOrUpdate(review);
 
-        //写入Redis和布隆过滤器
-        String cacheKey = detailKey(userId, date);
-        String json;
-        try {
-            json = objectMapper.writeValueAsString(review);
-            redisUtils.set(cacheKey, json, CACHE_TTL_SECONDS);
-        } catch (JsonProcessingException e) {
-            log.error("序列化失败, 未写入Redis, userId={}, date={}", userId, date, e);
-        }
+        //布隆过滤器
         bloomFilter.add(BloomFilter.NS_REVIEW, userId + ":" + date.toString());
 
         // 清空该用户所有任务的片段记录
         clearAllTaskSegments(userId);
 
-        // 新一天的数据入库后，清除该用户的周报/月报缓存
-        redisUtils.deletePattern("review:weekly:" + userId + ":*");
-        redisUtils.deletePattern("review:monthly:" + userId + ":*");
+        // 新一天的数据入库后，清除相关缓存，等待下次访问时重建，以保证双写一致性
+        redisUtils.delete("review:list:" + userId);
+        redisUtils.deletePattern("review:weekly:" + userId + ":*"); //周报
+        redisUtils.deletePattern("review:monthly:" + userId + ":*"); //月报
     }
 
     // 对于长周期任务和ddl任务，当天的目标时长为剩余时长
