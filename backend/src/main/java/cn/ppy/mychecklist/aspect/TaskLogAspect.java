@@ -104,39 +104,42 @@ public class TaskLogAspect {
         boolean isDone = Boolean.TRUE.equals(task.getIsCompleted());
         int actual = task.getActualDuration() == null ? 0 : task.getActualDuration();
         int target = task.getTargetDuration() == null ? 0 : task.getTargetDuration();
-        LocalDateTime now = boundary != null ? boundary : LocalDateTime.now();
 
-        // 未完成或未开始
+        // 未完成、未开始、暂不要求
         if (!isDone) {
-            if (actual > 0) return LogResultStatus.NOT_COMPLETED;
-            return isDueToComplete(task, now) ? LogResultStatus.NOT_STARTED : LogResultStatus.DEFERRED;
+            if (!isDueToComplete(task, boundary)) {
+                return LogResultStatus.DEFERRED;
+            } else {
+                return actual > 0 ? LogResultStatus.NOT_COMPLETED : LogResultStatus.NOT_STARTED;
+            }
         }
 
-        // 判断是否超时完成
+        // 完成、超时完成
         // DDL任务：指标是“截止时间endTime”
         if (task.getType() == TaskType.DEADLINE) {
-            if (task.getEndTime() != null && now.isAfter(task.getEndTime())) {
+            // boudary是第二天的4点，所以需要减1天，否则ddl当天完成的任务会被误判为超时完成
+            if (task.getEndTime() != null && boundary.minusDays(1).isAfter(task.getEndTime())) {
                 return LogResultStatus.LATE_COMPLETED;
             }
         } 
         // 手动确认的周期任务：指标是“计划用时plannedDuration”
         else if (task.getType() == TaskType.RECURRING && task.getSettlementType() == SettlementType.MANUAL) {
-            if (target > 0 && actual < target) {
+            if (target > 0 && actual > target) {
                 return LogResultStatus.LATE_COMPLETED;
             }
         }
-        // 其他情况：
-        // 自动确认的周期任务：到点即正常完成，没有超时概念
-        // 随手记：只有正常完成，没有超时概念
 
         return LogResultStatus.COMPLETED;
     }
 
     private boolean isDueToComplete(Task task, LocalDateTime boundary) {
-        if (task.getType() == TaskType.DEADLINE && task.getEndTime() != null) {
+        // boundary是第二天的凌晨4点
+        // 随手记和DDL任务：有截止日期且已经过了，才算未开始/未完成，否则记为暂不要求
+        if (task.getType() != TaskType.RECURRING && task.getEndTime() != null) {
             return task.getEndTime().isBefore(boundary);
         }
 
+        // 周期任务：如果过期说明未开始/未完成，否则暂不要求
         if (task.getType() == TaskType.RECURRING && task.getStartTime() != null && task.getCronConfig() != null) {
             LocalDateTime referencePoint = task.getStartTime().withHour(4).withMinute(0).withSecond(0).withNano(0);
             if (task.getStartTime().isBefore(referencePoint)) {
