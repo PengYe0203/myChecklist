@@ -2677,22 +2677,37 @@ const toggleRunStatus = async (task: TreeTask) => {
     }
   }
 
-  // 乐观更新
+  // 乐观更新：树节点
   task.runStatus = targetStatus === 'IN_PROGRESS' ? '1' : '2';
   task.lastStartTime = targetStatus === 'IN_PROGRESS' ? new Date().toISOString() : prevLastStart;
-  // 用覆写表传递运行状态给软约束检查，避免直接改 allTasks.value 触发 tree rebuild
+  // 同步 allTasks 中的原始对象，确保心跳定时器能读到正确的 lastStartTime
+  const targetRaw = allTasks.value.find((t) => t.taskId === task.taskId);
+  if (targetRaw) {
+    targetRaw.runStatus = targetStatus === 'IN_PROGRESS' ? '1' : '2';
+    targetRaw.lastStartTime = targetStatus === 'IN_PROGRESS' ? new Date().toISOString() : prevLastStart;
+  }
+  // 触发 computed 树重新计算，让 el-tree 拿到包含新 lastStartTime 的副本
+  allTasks.value = [...allTasks.value];
   localRunStatus.value[task.taskId] = targetStatus === 'IN_PROGRESS' ? '1' : '2';
   try {
     await toggleRunStatusApi(task.taskId, targetStatus);
     // 暂停后后端已结算，用实时值同步本地 actualDuration
     if (targetStatus === 'PAUSED') {
       task.actualDuration = settledActual;
+      if (targetRaw) targetRaw.actualDuration = settledActual;
     }
   } catch {
-    // 回滚
+    // 回滚树节点
     task.runStatus = prevRunStatus;
     task.lastStartTime = prevLastStart;
     task.actualDuration = prevActual;
+    // 回滚 allTasks 原始对象
+    if (targetRaw) {
+      targetRaw.runStatus = prevRunStatus;
+      targetRaw.lastStartTime = prevLastStart;
+      targetRaw.actualDuration = prevActual;
+    }
+    allTasks.value = [...allTasks.value];
     delete localRunStatus.value[task.taskId];
   } finally {
     lockingRunStatus.value = false;
