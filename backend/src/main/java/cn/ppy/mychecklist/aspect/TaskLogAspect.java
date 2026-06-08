@@ -20,8 +20,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 任务日志切面，只有一个功能：
@@ -50,14 +50,25 @@ public class TaskLogAspect {
         if (now.isBefore(boundary)) boundary = boundary.minusDays(1);
         LocalDate logDate = boundary.minusDays(1).toLocalDate();
 
+        // 查询前一天的TaskLog，用 actualDuration 差值计算当日贡献
+        LocalDate prevDate = logDate.minusDays(1);
+        List<TaskLog> prevLogs = taskLogMapper.selectList(new LambdaQueryWrapper<TaskLog>()
+                .eq(TaskLog::getUserId, userId)
+                .eq(TaskLog::getDate, prevDate));
+        Map<Long, Integer> prevActualMap = prevLogs.stream()
+                .collect(Collectors.toMap(TaskLog::getTaskId,
+                        log -> log.getActualDuration() != null ? log.getActualDuration() : 0,
+                        (a, b) -> a));
+
         List<Task> tasks = taskMapper.selectList(new LambdaQueryWrapper<Task>()
                 .eq(Task::getUserId, userId));
         for (Task task : tasks) {
-            doRecord(task, logDate, boundary);
+            doRecord(task, logDate, boundary, prevActualMap);
         }
     }
 
-    private void doRecord(Task task, LocalDate logDate, LocalDateTime boundary) {
+    private void doRecord(Task task, LocalDate logDate, LocalDateTime boundary,
+            Map<Long, Integer> prevActualMap) {
         // 场景任务(SCENE)仅作为组织容器，没有时长和完成度指标，不记录日志
         if (task.getType() == TaskType.SCENE) return;
 
@@ -77,8 +88,11 @@ public class TaskLogAspect {
         taskLog.setParentId(task.getParentId());
         
         //执行结果
-        taskLog.setActualDuration(task.getActualDuration() != null ? task.getActualDuration() : 0);
-        taskLog.setDailyActualDuration(calculateDailyDuration(task.getCurrentDaySegments()));
+        int curActual = task.getActualDuration() != null ? task.getActualDuration() : 0;
+        taskLog.setActualDuration(curActual);
+        // 当日贡献 = 当前累计actualDuration - 前一日TaskLog中的actualDuration
+        int prevActual = prevActualMap.getOrDefault(task.getTaskId(), 0);
+        taskLog.setDailyActualDuration(Math.max(0, curActual - prevActual));
         taskLog.setResultStatus(calculateResultStatus(task, boundary));
         taskLog.setWorkSegments(task.getCurrentDaySegments());
         
@@ -151,20 +165,4 @@ public class TaskLogAspect {
         return false;
     }
 
-    // 根据执行时段得到当日执行时长
-    private int calculateDailyDuration(String segmentsJson) {
-        if (segmentsJson == null || segmentsJson.isEmpty() || "[]".equals(segmentsJson)) {
-            return 0;
-        }
-
-        int total = 0;
-        Pattern p = Pattern.compile("\\[(\\d+),(\\d+)\\]");
-        Matcher m = p.matcher(segmentsJson);
-        while (m.find()) {
-            int start = Integer.parseInt(m.group(1));
-            int end = Integer.parseInt(m.group(2));
-            total += (end - start);
-        }
-        return total;
-    }
 }
