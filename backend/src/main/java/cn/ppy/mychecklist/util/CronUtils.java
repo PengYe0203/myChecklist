@@ -67,8 +67,20 @@ public class CronUtils {
     public static boolean isExpired(String cron, LocalDateTime cycleStartRef) {
         if (cron == null || cycleStartRef == null) return false;
         
-        LocalDateTime nextTime = getNextExecution(cron, cycleStartRef); //下一个周期的开始时间
-        return nextTime != null && !LocalDateTime.now().isBefore(nextTime);
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime nextStart = getNextExecution(cron, cycleStartRef);
+        if (nextStart == null) return false; // 无法解析cron表达式，默认不刷新
+
+        //now对齐到四点
+        LocalDateTime todayStart = now.withHour(4).withMinute(0).withSecond(0).withNano(0);
+        if(now.isBefore(todayStart)) todayStart = todayStart.minusDays(1); //如果不到四点，现在属于前一天
+
+        //cycleStartRef对齐到四点
+        LocalDateTime nextStartDay = nextStart.withHour(4).withMinute(0).withSecond(0).withNano(0);
+        if(nextStart.isBefore(nextStartDay)) nextStartDay = nextStartDay.minusDays(1);
+
+        // 如果下个周期的日期晚于当前的日期，说明当前周期未过期
+        return !nextStartDay.isAfter(todayStart);
     }
 
     /**
