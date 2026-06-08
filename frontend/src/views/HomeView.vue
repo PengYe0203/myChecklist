@@ -560,11 +560,21 @@
             <template v-if="selectedReview">
               <div class="detail-grid">
                 <div class="detail-item">
-                  <span>完成任务 / 任务总数</span>
+                  <span>
+                    完成任务 / 任务总数
+                    <el-tooltip effect="dark" placement="top" content="仅统计需要完成的任务">
+                      <span class="detail-help-icon">?</span>
+                    </el-tooltip>
+                  </span>
                   <strong>{{ selectedReview.doneCount ?? 0 }} / {{ selectedReview.totalCount ?? 0 }}</strong>
                 </div>
                 <div class="detail-item">
-                  <span>实际用时 / 计划用时</span>
+                  <span>
+                    实际用时 / 计划用时
+                    <el-tooltip effect="dark" placement="top" content="仅统计已设置计划用时的任务">
+                      <span class="detail-help-icon">?</span>
+                    </el-tooltip>
+                  </span>
                   <strong>{{ formatDuration(selectedReview.actualDurationSum) }} / {{ formatDuration(selectedReview.plannedDurationSum) }}</strong>
                 </div>
               </div>
@@ -1170,11 +1180,21 @@
           <div class="task-dialog-page read-only-view">
             <div class="detail-grid">
               <div class="detail-item">
-                <span>完成任务 / 总任务</span>
+                <span>
+                  完成任务 / 总任务
+                  <el-tooltip effect="dark" placement="top" content="仅统计需要完成的任务">
+                    <span class="detail-help-icon">?</span>
+                  </el-tooltip>
+                </span>
                 <strong>{{ reportData.doneCount ?? 0 }} / {{ reportData.totalCount ?? 0 }}</strong>
               </div>
               <div class="detail-item">
-                <span>实际时长 / 计划时长</span>
+                <span>
+                  实际时长 / 计划时长
+                  <el-tooltip effect="dark" placement="top" content="仅统计已设置计划用时的任务">
+                    <span class="detail-help-icon">?</span>
+                  </el-tooltip>
+                </span>
                 <strong>{{ formatDuration(reportData.actualDurationSum) }} / {{ formatDuration(reportData.plannedDurationSum) }}</strong>
               </div>
             </div>
@@ -4015,10 +4035,29 @@ onBeforeUnmount(() => {
 }
 
 .detail-item span {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: #8f6b00;
   font-size: 12px;
   margin-bottom: 6px;
+}
+
+.detail-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #6b7280;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  cursor: help;
+  user-select: none;
+  flex-shrink: 0;
 }
 
 .detail-item strong {
