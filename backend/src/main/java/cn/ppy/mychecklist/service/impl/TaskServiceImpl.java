@@ -295,7 +295,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             context.markModified(task);
 
             // 自动开始父任务
-            activateParentSequentially(task.getParentId(), context);
+            // activateParentSequentially(task.getParentId(), context);
         }
 
         this.updateBatchById(context.getModifiedTasks());
@@ -366,6 +366,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         }
     }
 
+    /* 
     private void activateParentSequentially(Long parentId, TaskTreeContext context) {
         if (parentId == null || parentId == 0) return;
         Task parent = context.getTask(parentId);
@@ -381,6 +382,7 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
             activateParentSequentially(parent.getParentId(), context);
         }
     }
+    */
 
     private void updateActualDuration(Task task) {
         int own = task.getOwnDuration() == null ? 0 : task.getOwnDuration();
