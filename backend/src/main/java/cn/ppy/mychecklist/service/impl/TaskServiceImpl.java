@@ -541,8 +541,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
         if (task.getType() == TaskType.SCENE) return;
 
         if(complete){ //任务完成，把运行状态切换到未开始，记录结束时间
-            // 这里不能复用toggleRunStatus方法，因为涉及了级联操作，本方法只关注单个任务的完成
-            if(task.getRunStatus() == RunStatusType.IN_PROGRESS) {
+            // 如果正在计时中且有有效起点，结算最后一段时长
+            if(task.getRunStatus() == RunStatusType.IN_PROGRESS && task.getLastStartTime() != null) {
                 LocalDateTime now = LocalDateTime.now();
                 long duration = java.time.Duration.between(task.getLastStartTime(), now).getSeconds();
                 int seconds = (int) duration;
@@ -559,10 +559,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, Task> implements Ta
                 if (Boolean.TRUE.equals(task.getInheritParentTime())) {
                     updateParentSubDuration(task.getParentId(), seconds, context);
                 }
-                
             }
             task.setRunStatus(RunStatusType.NOT_STARTED);
-            task.setLastStartTime(null); //完成状态不应该有未结算的计时上下文
+            task.setLastStartTime(null);
         }
 
         task.setIsCompleted(complete);
