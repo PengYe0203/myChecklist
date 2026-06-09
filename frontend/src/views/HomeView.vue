@@ -29,6 +29,9 @@
       </nav>
 
       <div class="sidebar-bottom">
+        <el-button class="notify-toggle-btn" :class="{ active: notifyEnabled }" plain @click="toggleNotification">
+          {{ notifyEnabled ? '🔔 通知已开启' : '🔕 开启系统通知' }}
+        </el-button>
         <el-button class="logout-btn" type="warning" plain @click="handleLogout">退出登录</el-button>
       </div>
     </aside>
@@ -1370,6 +1373,12 @@ const lockingRunStatus = ref(false);
 const lockingComplete = ref(false);
 const lockingActive = ref(false);
 
+// 通知记录：已通知"达到计划用时"的任务ID集合，防止重复提醒
+const notifiedPlanReached = ref<Set<number>>(new Set());
+
+// 用户手动开关通知
+const notifyEnabled = ref(false);
+
 const taskTypeOptions: Array<{ label: string; value: number }> = [
   { label: '随手记', value: 0 },
   { label: '周期任务', value: 1 },
@@ -1474,7 +1483,8 @@ const liveActual = (task: TaskItem) => {
 const progressPercent = (task: TaskItem) => {
   const target = Number(task.targetDuration ?? 0);
   if (target <= 0) return 0;
-  return Math.min(100, Math.round((liveActual(task) / target) * 100));
+  const actual = liveActual(task);
+  return Math.min(100, Math.round((actual / target) * 100));
 };
 
 const formatDurationHMS = (seconds?: number) => {
@@ -1636,10 +1646,33 @@ const timelineGroups = computed(() => {
   ];
 });
 
+const checkPlanReachedNotifications = () => {
+  if (!notifyEnabled.value) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = heartbeatNow.value;
+  for (const task of allTasks.value) {
+    if (!task.active || task.isCompleted) continue;
+    const target = Number(task.targetDuration ?? 0);
+    if (target <= 0) continue;
+    // 已通知过则跳过
+    if (notifiedPlanReached.value.has(task.taskId)) continue;
+    // 实时累计用时 = 已结算actual + 本次运行中流逝秒数
+    const cur = isHeartbeatTask(task) ? liveActual(task) : Number(task.actualDuration ?? 0);
+    if (cur >= target) {
+      notifiedPlanReached.value.add(task.taskId);
+      new Notification('计划用时已到', {
+        body: `「${task.title}」已累计达到计划用时（${formatDurationHMS(cur)} / ${formatDurationHMS(target)}），请及时处理。`,
+        icon: '/favicon.ico',
+      });
+    }
+  }
+};
+
 const startHeartbeatTimer = () => {
   if (heartbeatTimer !== null) return;
   heartbeatTimer = window.setInterval(() => {
     heartbeatNow.value = Date.now();
+    checkPlanReachedNotifications(); // 每秒检查是否需要提醒
     if (heartbeatSyncing.value) return;
 
     const runningTasks = allTasks.value.filter(isHeartbeatTask);
@@ -2323,6 +2356,16 @@ const loadTasks = async () => {
     allTasks.value = response.data || [];
     localRunStatus.value = {};
     heartbeatNow.value = Date.now();
+    // 清理通知记录：仅保留仍然"未完成 + 仍有计划用时"的任务
+    const stillValid = new Set<number>();
+    for (const t of allTasks.value) {
+      if (notifiedPlanReached.value.has(t.taskId)
+        && t.active && !t.isCompleted
+        && Number(t.targetDuration ?? 0) > 0) {
+        stillValid.add(t.taskId);
+      }
+    }
+    notifiedPlanReached.value = stillValid;
   } finally {
     loadingTasks.value = false;
   }
@@ -2562,6 +2605,34 @@ const handleLogout = async () => {
   await router.push('/login');
 };
 
+const toggleNotification = async () => {
+  if (!('Notification' in window)) {
+    ElMessage.warning('当前浏览器不支持系统通知');
+    return;
+  }
+  if (notifyEnabled.value) {
+    // 关闭通知
+    notifyEnabled.value = false;
+    ElMessage.info('系统通知已关闭');
+  } else {
+    // 开启通知
+    if (Notification.permission === 'granted') {
+      notifyEnabled.value = true;
+      ElMessage.success('系统通知已开启');
+    } else if (Notification.permission === 'denied') {
+      ElMessage.warning('通知权限已被浏览器拒绝，请在浏览器设置中手动开启');
+    } else {
+      const result = await Notification.requestPermission();
+      if (result === 'granted') {
+        notifyEnabled.value = true;
+        ElMessage.success('系统通知已开启');
+      } else {
+        ElMessage.warning('您拒绝了通知权限，无法开启系统通知');
+      }
+    }
+  }
+};
+
 const toggleActive = async (task: TreeTask) => {
   if (lockingActive.value) return;
   lockingActive.value = true;
@@ -2719,6 +2790,8 @@ const toggleRunStatus = async (task: TreeTask) => {
     if (targetStatus === 'PAUSED') {
       task.actualDuration = settledActual;
       if (targetRaw) targetRaw.actualDuration = settledActual;
+      // 重新构建 tree，让 el-tree 拿到更新后的 actualDuration
+      allTasks.value = [...allTasks.value];
     }
   } catch {
     // 回滚树节点
@@ -3152,6 +3225,10 @@ const countTree = (nodes: TreeTask[], predicate?: (task: TaskItem) => boolean): 
 };
 
 onMounted(async () => {
+  // 检查浏览器通知权限状态，自动同步开关
+  if ('Notification' in window && Notification.permission === 'granted') {
+    notifyEnabled.value = true;
+  }
   await Promise.all([loadTasks(), loadReviews()]);
   const storedDraft = window.localStorage.getItem(draftStorageKey.value);
   if (storedDraft !== null) {
@@ -3295,6 +3372,35 @@ onBeforeUnmount(() => {
 .sidebar-bottom {
   margin-top: auto;
   padding: 18px 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notify-toggle-btn {
+  width: 100%;
+  height: 32px;
+  padding: 8px 15px;
+  font-size: 14px;
+  border-radius: 4px;
+  color: #374151;
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+
+.notify-toggle-btn.active {
+  color: #065f46;
+  background: linear-gradient(180deg, #d1fae5 0%, #a7f3d0 100%);
+  border-color: rgba(5, 150, 105, 0.3);
+  box-shadow: 0 6px 16px rgba(52, 211, 153, 0.2);
+}
+
+.notify-toggle-btn:hover {
+  background: #e5e7eb;
+}
+
+.notify-toggle-btn.active:hover {
+  background: linear-gradient(180deg, #baf3d5 0%, #8eebbe 100%);
 }
 
 .logout-btn {
