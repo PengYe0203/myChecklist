@@ -29,9 +29,14 @@
       </nav>
 
       <div class="sidebar-bottom">
-        <el-button class="notify-toggle-btn" :class="{ active: notifyEnabled }" plain @click="toggleNotification">
-          {{ notifyEnabled ? '🔔 通知已开启' : '🔕 开启系统通知' }}
-        </el-button>
+        <el-tooltip placement="right" effect="dark">
+          <template #content>
+            <div>如果开启通知后，仍无法收到通知，请检查是否属于下列情况：<br/>1. 您使用的是Safari浏览器：本应用采用Web Notification API，暂不支持该浏览器的通知功能<br/>2. 您在系统设置中关闭了浏览器的通知权限，或者开启了勿扰模式</div>
+          </template>
+          <el-button class="notify-toggle-btn" :class="{ active: notifyEnabled }" plain @click="toggleNotification">
+            {{ notifyEnabled ? '🔔 通知已开启' : '🔕 开启系统通知' }}
+          </el-button>
+        </el-tooltip>
         <el-button class="logout-btn" type="warning" plain @click="handleLogout">退出登录</el-button>
       </div>
     </aside>
