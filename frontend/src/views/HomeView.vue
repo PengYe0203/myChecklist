@@ -1431,7 +1431,11 @@ const normalizeNumberList = (values: number[]) => Array.from(new Set(values)).so
 
 const parseHeartbeatTime = (value?: string) => {
   if (!value) return null;
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  let normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  // LocalDateTime 序列化不带时区，实际值为东八区时间。
+  if (!/[+-]\d{2}:\d{2}$/.test(normalized) && !normalized.endsWith('Z')) {
+    normalized += '+08:00';
+  }
   const parsed = new Date(normalized);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };

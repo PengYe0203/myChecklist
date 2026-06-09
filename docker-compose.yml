@@ -6,6 +6,7 @@ services:
       - ./.env  #在根目录下有.env文件，里面包含了后端服务需要的环境变量
     environment:
       SPRING_PROFILES_ACTIVE: prod  #设置Spring Boot的运行环境为生产环境
+      TZ: Asia/Shanghai
     ports:
       - "8080:8080"
 
