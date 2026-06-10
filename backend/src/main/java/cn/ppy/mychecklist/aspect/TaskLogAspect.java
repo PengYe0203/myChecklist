@@ -91,8 +91,18 @@ public class TaskLogAspect {
         int curActual = task.getActualDuration() != null ? task.getActualDuration() : 0;
         taskLog.setActualDuration(curActual);
         // 当日贡献 = 当前累计actualDuration - 前一日TaskLog中的actualDuration
+        // 周期任务在当前周期起点被 refreshTask 归零，此时 startTime 的日期 == logDate，
+        // 说明当天凌晨刚被刷新，curActual 即为全天贡献，应全量计入而非做差
         int prevActual = prevActualMap.getOrDefault(task.getTaskId(), 0);
-        taskLog.setDailyActualDuration(Math.max(0, curActual - prevActual));
+        int dailyContribution;
+        if (task.getType() == TaskType.RECURRING 
+                && task.getStartTime() != null 
+                && task.getStartTime().toLocalDate().equals(logDate)) {
+            dailyContribution = curActual;
+        } else {
+            dailyContribution = Math.max(0, curActual - prevActual);
+        }
+        taskLog.setDailyActualDuration(dailyContribution);
         taskLog.setResultStatus(calculateResultStatus(task, boundary));
         taskLog.setWorkSegments(task.getCurrentDaySegments());
         
